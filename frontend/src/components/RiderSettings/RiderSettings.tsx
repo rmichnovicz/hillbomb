@@ -85,6 +85,7 @@ export function RiderSettings({ profile, params, onProfileChange, onParamsChange
                   onProfileChange(p)
                   onParamsChange(RIDER_PROFILES[p])
                 }}
+                aria-pressed={profile === p}
                 style={{
                   flex: 1,
                   fontSize: '11px',

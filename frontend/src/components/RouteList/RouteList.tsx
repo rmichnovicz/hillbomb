@@ -17,6 +17,9 @@ interface RouteListProps {
   statusMessage: string | null
   isSearching: boolean
   error: string | null
+  /** True once at least one search has been started — distinguishes the
+   *  initial prompt from a completed search that found nothing. */
+  hasSearched?: boolean
   /** When false, the list grows with its content instead of filling parent height. Use in scrollable panels. */
   fillHeight?: boolean
 }
@@ -34,6 +37,7 @@ export function RouteList({
   statusMessage,
   isSearching,
   error,
+  hasSearched = false,
   fillHeight = true,
 }: RouteListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -77,6 +81,7 @@ export function RouteList({
             <button
               key={mode}
               onClick={() => onSortModeChange(mode)}
+              aria-pressed={sortMode === mode}
               style={{
                 fontSize: '11px',
                 padding: '2px 8px',
@@ -98,8 +103,10 @@ export function RouteList({
       {/* Group cards */}
       <div ref={scrollContainerRef} style={{ ...(fillHeight ? { flex: 1, overflowY: 'auto' } : {}), padding: '8px' }}>
         {groups.length === 0 && !isSearching && !error && (
-          <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', marginTop: '24px' }}>
-            Search an area to find hill bombs.
+          <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', marginTop: '24px', padding: '0 16px', lineHeight: 1.5 }}>
+            {hasSearched
+              ? 'No hill bombs found in this area. Try panning to hillier terrain, widening the map, or relaxing the road/surface filters below.'
+              : 'Search an area to find hill bombs.'}
           </p>
         )}
         {groups.map(group => (

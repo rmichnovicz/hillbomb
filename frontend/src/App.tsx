@@ -37,6 +37,7 @@ export default function App() {
   const [roadSizeStep, setRoadSizeStep] = useState(DEFAULT_ROAD_SIZE_STEP)
   const [allowedSurfaces, setAllowedSurfaces] = useState<SurfaceCategory[]>([...ALL_SURFACE_CATEGORIES])
   const [currentBbox, setCurrentBbox] = useState<[number, number, number, number]>([37.74, -122.47, 37.80, -122.40])
+  const [hasSearched, setHasSearched] = useState(false)
 
   const isMobile = useIsMobile(640)
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false)
@@ -113,10 +114,11 @@ export default function App() {
       crr_pathfinding: riderParams.crr_pathfinding,
     }
     startSearch(options)
+    setHasSearched(true)
     setActiveGroupId(null)
     setActiveRouteId(null)
     setScrubPosition(null)
-  }, [currentBbox, riderProfile, toggles, roadSizeStep, allowedSurfaces, startSearch])
+  }, [currentBbox, riderProfile, toggles, roadSizeStep, allowedSurfaces, riderParams.crr_pathfinding, startSearch])
 
   const handleSelectGroup = useCallback((startNodeId: string) => {
     setActiveGroupId(prev => prev === startNodeId ? null : startNodeId)
@@ -264,6 +266,7 @@ export default function App() {
               statusMessage={statusMessage}
               isSearching={isSearching}
               error={error}
+              hasSearched={hasSearched}
               fillHeight={false}
             />
 
@@ -348,6 +351,7 @@ export default function App() {
             statusMessage={statusMessage}
             isSearching={isSearching}
             error={error}
+            hasSearched={hasSearched}
           />
         </div>
 
