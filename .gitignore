@@ -1,0 +1,27 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Dev artifacts
+backend/_out/
+*.geojson
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Elevation tile cache (large binary files — auto-downloaded on first run)
+# HTTP fixture JSON is committed (small, makes integration tests network-free)
+backend/tests/fixtures/elevation/dep13/
+backend/tests/fixtures/elevation/srtm/
+
+# Local
+_unzipped/
+.DS_Store
+
+# Binary caches / archives
+backend/_cache_twins.pkl
+*.zip
+.claude/settings.local.json

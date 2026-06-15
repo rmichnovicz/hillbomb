@@ -1,0 +1,88 @@
+"""
+Flow score computation for a finalized route.
+
+Score starts at 100 and deducts per occurrence:
+  - traffic signal node (not at start): -flow_penalty_stoplight
+  - stop sign node (not at start):      -flow_penalty_stop_sign
+  - edge with cobblestone surface:      -flow_penalty_surface_cobble
+  - edge with gravel surface:           -flow_penalty_surface_gravel
+  - edge with unpaved surface:          -flow_penalty_surface_unpaved
+  - edge hw_rank > previous edge hw_rank: -flow_penalty_bigger_road
+
+Score is clamped to [0, 100].
+Letter grade: A≥80, B≥60, C≥40, D≥20, E≥1, F=0.
+"""
+
+import networkx as nx
+from .config import SearchConfig
+from .types import OSMNode, Route
+
+_ROUGH_SURFACES = {"cobblestone", "sett", "paving_stones"}
+_GRAVEL_SURFACES = {"gravel", "fine_gravel", "pebblestone"}
+_UNPAVED_SURFACES = {"unpaved", "compacted", "dirt", "grass", "sand", "mud"}
+
+
+def score_to_grade(score: float) -> str:
+    if score >= 80:
+        return "A"
+    if score >= 60:
+        return "B"
+    if score >= 40:
+        return "C"
+    if score >= 20:
+        return "D"
+    if score > 0:
+        return "E"
+    return "F"
+
+
+def compute_flow_score(
+    route: Route,
+    G: nx.DiGraph,
+    nodes_by_id: dict[int, OSMNode],
+    config: SearchConfig,
+) -> Route:
+    """
+    Compute and attach flow_score / flow_grade to the route. Mutates and returns route.
+    """
+    score = 100.0
+    node_ids = route.node_ids
+
+    # Track previous edge hw_rank for bigger-road-crossing detection
+    prev_hw_rank: int | None = None
+
+    for i, nid in enumerate(node_ids):
+        # ── Node penalties (skip start node) ──────────────────────────────────
+        if i > 0:
+            node_data = G.nodes.get(nid, {})
+            if node_data.get("is_traffic_signal"):
+                score -= config.flow_penalty_stoplight
+            if node_data.get("is_stop_sign"):
+                score -= config.flow_penalty_stop_sign
+
+        # ── Edge penalties ────────────────────────────────────────────────────
+        if i < len(node_ids) - 1:
+            next_id = node_ids[i + 1]
+            if not G.has_edge(nid, next_id):
+                continue
+            edge = G[nid][next_id]
+
+            # Surface penalty (at most one category per edge)
+            surface = edge.get("surface", "")
+            if surface in _ROUGH_SURFACES:
+                score -= config.flow_penalty_surface_cobble
+            elif surface in _GRAVEL_SURFACES:
+                score -= config.flow_penalty_surface_gravel
+            elif surface in _UNPAVED_SURFACES:
+                score -= config.flow_penalty_surface_unpaved
+
+            # Bigger-road crossing
+            hw_rank = edge.get("hw_rank", 0)
+            if prev_hw_rank is not None and hw_rank > prev_hw_rank:
+                score -= config.flow_penalty_bigger_road
+            prev_hw_rank = hw_rank
+
+    score = max(0.0, min(100.0, score))
+    route.flow_score = score
+    route.flow_grade = score_to_grade(score)
+    return route

@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+networkx==3.4.2
+numpy==2.2.1
+httpx==0.28.1
+rasterio==1.4.3
+boto3==1.38.27
+pytest==9.0.3

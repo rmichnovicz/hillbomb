@@ -1,0 +1,21 @@
+{
+  "url": "https://tnmaccess.nationalmap.gov/api/v1/products",
+  "params": {
+    "datasets": "Digital Elevation Model (DEM) 1/3 arc-second",
+    "bbox": "18.0,-34.0,19.0,-33.0",
+    "prodFormats": "GeoTiff",
+    "max": 5,
+    "outputFormat": "JSON"
+  },
+  "status_code": 200,
+  "body": {
+    "total": 0,
+    "items": [],
+    "errors": [],
+    "messages": [
+      "The offset is greater than the total number of results for this query. No items returned."
+    ],
+    "sciencebaseQuery": "https://www.sciencebase.gov/catalog/items?filter=tagslq%3Dtags.scheme%3A%22The+National+Map+Collection+Thesaurus%22+AND+%28tags.name%3A+%22Digital+Elevation+Model+%28DEM%29+1%2F3+arc-second%22%29&filter=tagslq%3Dtags.scheme%3A%22The+National+Map+Product+Format+Thesaurus%22+AND+%28tags.name%3A+%22GeoTiff%22%29&filter=spatialQuery%3D%7B%22wkt%22%3A%22POLYGON%28%2818.0+-34.0%2C19.0+-34.0%2C19.0+-33.0%2C18.0+-33.0%2C18.0+-34.0%29%29%22%2C%22relation%22%3A%22intersects%22%7D&max=5&offset=0&fields=id%2Ctitle%2Csummary%2Cbody%2Ctags%2CwebLinks%2Cdates%2Cspatial%2Cidentifiers&format=json&sort=title&order=asc",
+    "filteredOut": 0
+  }
+}
