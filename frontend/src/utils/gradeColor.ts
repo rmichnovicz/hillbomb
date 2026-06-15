@@ -22,23 +22,17 @@ export const GRADE_STOPS: GradeStop[] = [
  *  downhill (negative) and uphill (positive) get the same color bucket. */
 export function gradeToColor(grade: number): string {
   const abs = Math.abs(grade)
-  let color = GRADE_STOPS[0].color
-  for (const stop of GRADE_STOPS) {
-    if (abs >= stop.grade) {
-      color = stop.color
-    }
+  for (let i = GRADE_STOPS.length - 1; i >= 0; i--) {
+    if (abs >= GRADE_STOPS[i].grade) return GRADE_STOPS[i].color
   }
-  return color
+  return GRADE_STOPS[0].color
 }
 
-const FLOW_GRADE_COLORS: Record<string, string> = {
-  A: '#4ade80',  // green
-  B: '#a3e635',  // lime
-  C: '#facc15',  // yellow
-  D: '#fb923c',  // orange
-  E: '#f87171',  // red
-  F: '#dc2626',  // dark red
-}
+// Flow grades A–F map onto the grade stops gentle→steep, so derive them from
+// the single GRADE_STOPS source rather than repeating the hex values.
+const FLOW_GRADE_COLORS: Record<string, string> = Object.fromEntries(
+  ['A', 'B', 'C', 'D', 'E', 'F'].map((letter, i) => [letter, GRADE_STOPS[i].color]),
+)
 
 /** Map a flow grade letter (A–F) to a display color. */
 export function flowGradeColor(grade: string): string {

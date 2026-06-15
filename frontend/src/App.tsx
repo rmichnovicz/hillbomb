@@ -11,7 +11,6 @@ import { SearchControls, DEFAULT_ROAD_SIZE_STEP, ROAD_SIZE_STEPS, ALL_SURFACE_CA
 import type { SurfaceCategory } from './components/SearchControls/SearchControls'
 import { RIDER_PROFILES } from './types'
 import type { RiderProfile, RiderParams, SearchOptions, Toggles, StartGroup } from './types'
-import './App.css'
 
 const DEFAULT_TOGGLES: Toggles = {
   avoid_stoplights: true,
