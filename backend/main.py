@@ -198,15 +198,27 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request
         if await is_done():
             return
 
-        # Filter ways by max road rank
-        ways = [w for w in ways if HIGHWAY_RANK.get(w.highway, 3) <= req.max_road_rank]
-
-        # Filter ways by allowed surface categories (ways with no surface tag are always kept)
+        # Decide traversability per way. Bigger roads (and surface/rank-excluded
+        # ways) stay in the graph so the avoid-bigger/equal-roads toggles can stop
+        # a descent at them, but are tagged non-traversable so they're never ridden.
+        allowed_tags: set[str] | None = None
         if req.allowed_surface_categories is not None:
-            allowed_tags: set[str] = set()
+            allowed_tags = set()
             for cat in req.allowed_surface_categories:
                 allowed_tags |= SURFACE_CATEGORIES.get(cat, set())
-            ways = [w for w in ways if not w.surface or w.surface in allowed_tags]
+
+        def _is_rideable(w) -> bool:
+            if w.highway not in road_types:
+                return False
+            if HIGHWAY_RANK.get(w.highway, 3) > req.max_road_rank:
+                return False
+            # Ways with no surface tag are always allowed.
+            if allowed_tags is not None and w.surface and w.surface not in allowed_tags:
+                return False
+            return True
+
+        for w in ways:
+            w.traversable = _is_rideable(w)
 
         used_ids = {nid for w in ways for nid in w.node_ids}
         active_nodes = {nid: n for nid, n in nodes.items() if nid in used_ids}

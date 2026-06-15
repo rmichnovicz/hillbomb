@@ -145,6 +145,7 @@ def build_graph(
                 is_bridge=way.is_bridge,
                 is_tunnel=way.is_tunnel,
                 way_name=way.name,
+                traversable=way.traversable,
             )
 
     # ── 3. Tag intersection nodes (undirected degree >= 3) ───────────────────

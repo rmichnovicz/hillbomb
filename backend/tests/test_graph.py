@@ -192,6 +192,22 @@ class TestEdgeConstruction:
         G = _build([n1, n2], [_way(1, [1, 2], is_bridge=True)])
         assert G[1][2].get("is_bridge") is True
 
+    def test_traversable_flag_propagates_to_edges(self):
+        """A way's traversable flag must carry onto both directed edges."""
+        n1 = _node(1, 37.750, -122.45, elevation=20.0)
+        n2 = _node(2, 37.751, -122.45, elevation=15.0)
+        way = _way(1, [1, 2], highway="primary")
+        way.traversable = False  # detection-only bigger road
+        G = _build([n1, n2], [way])
+        assert G[1][2].get("traversable") is False
+        assert G[2][1].get("traversable") is False
+
+    def test_edges_traversable_by_default(self):
+        n1 = _node(1, 37.750, -122.45, elevation=20.0)
+        n2 = _node(2, 37.751, -122.45, elevation=15.0)
+        G = _build([n1, n2], [_way(1, [1, 2])])
+        assert G[1][2].get("traversable") is True
+
 
 # ── Node tagging ──────────────────────────────────────────────────────────────
 

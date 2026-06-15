@@ -72,12 +72,14 @@ def _add_edge(
     surface: str = "asphalt",
     is_tunnel: bool = False,
     way_name: str = "Test Street",
+    traversable: bool = True,
 ) -> None:
     G.add_edge(
         u, v,
         grade=grade, distance_m=dist,
         highway=highway, hw_rank=hw_rank, surface=surface,
         is_bridge=False, is_tunnel=is_tunnel, way_name=way_name,
+        traversable=traversable,
     )
 
 
@@ -505,6 +507,93 @@ def test_avoid_equal_roads_stops_when_turning_onto_different_equal_road():
         "Expected route to terminate at node 3 rather than turn onto Bunker Road"
     assert all(r.node_ids[-1] != 4 for r in routes), \
         "Route turned onto a different equal-class road despite avoid_equal_roads=True"
+
+
+def test_bigger_cross_road_stops_descent_on_same_road():
+    """
+    The 16th Ave × Geary case: a descent stays on one residential way that runs
+    STRAIGHT THROUGH a junction with a bigger road. The bigger road is present in
+    the graph only as a non-traversable detection edge at the junction node.
+
+        1(peak) --16th Ave(res)--> 2 --16th Ave(res)--> 3(valley)
+                                   |
+                       Geary(primary, non-traversable, two-way)
+                                  G1 <==> 2 <==> G2
+
+    With avoid_bigger_roads=True the route must terminate at node 2 — you can't
+    bomb across Geary — even though 16th Ave itself continues to node 3. Before
+    the fix the bigger road was never fetched, so nothing stopped the descent.
+    """
+    G = nx.DiGraph()
+    nodes = {}
+    for i, (south_m, elev, is_peak, is_valley) in enumerate([
+        (0,   100.0, True,  False),
+        (150, 85.0,  False, False),   # 2: 16th × Geary junction
+        (300, 70.0,  False, True),    # 3: valley further down 16th
+    ], start=1):
+        node = _make_node(i, south_m, elev, is_peak=is_peak, is_valley=is_valley)
+        nodes[i] = node
+        _add_node(G, node, is_peak=is_peak, is_valley=is_valley)
+    # Geary cross-street nodes, off to the side of the junction.
+    for gid in (101, 102):
+        gnode = _make_node(gid, 150.0, 84.0)
+        nodes[gid] = gnode
+        _add_node(G, gnode)
+    G.nodes[2]["is_intersection"] = True
+
+    # 16th Avenue runs straight through: residential, traversable.
+    _add_edge(G, 1, 2, grade=-0.10, dist=150.0, hw_rank=3, highway="residential", way_name="16th Ave")
+    _add_edge(G, 2, 3, grade=-0.10, dist=150.0, hw_rank=3, highway="residential", way_name="16th Ave")
+    # Geary Blvd: bigger road, present only for detection — non-traversable.
+    for gid in (101, 102):
+        _add_edge(G, 2, gid, grade=-0.01, dist=150.0, hw_rank=7,
+                  highway="primary", way_name="Geary Blvd", traversable=False)
+
+    toggles = Toggles(avoid_bigger_roads=True)
+    routes = _run(G, nodes, toggles=toggles)
+
+    assert any(r.node_ids[-1] == 2 for r in routes), \
+        "Expected the descent to stop at the 16th × Geary junction (node 2)"
+    assert all(r.node_ids[-1] != 3 for r in routes), \
+        "Descent crossed Geary and continued down 16th despite avoid_bigger_roads=True"
+    # The bigger road must never be ridden, regardless of the toggle.
+    assert all(101 not in r.node_ids and 102 not in r.node_ids for r in routes), \
+        "A non-traversable (detection-only) bigger road was ridden"
+
+
+def test_non_traversable_road_never_ridden_even_with_toggle_off():
+    """
+    A detection-only bigger road is never ridden, even with avoid_bigger_roads off.
+    With the toggle off the descent simply continues straight on the smaller road
+    across the junction — it does not turn onto the arterial.
+    """
+    G = nx.DiGraph()
+    nodes = {}
+    for i, (south_m, elev, is_peak, is_valley) in enumerate([
+        (0,   100.0, True,  False),
+        (150, 85.0,  False, False),
+        (300, 70.0,  False, True),
+    ], start=1):
+        node = _make_node(i, south_m, elev, is_peak=is_peak, is_valley=is_valley)
+        nodes[i] = node
+        _add_node(G, node, is_peak=is_peak, is_valley=is_valley)
+    gnode = _make_node(101, 150.0, 84.0)
+    nodes[101] = gnode
+    _add_node(G, gnode)
+    G.nodes[2]["is_intersection"] = True
+
+    _add_edge(G, 1, 2, hw_rank=3, highway="residential", way_name="16th Ave")
+    _add_edge(G, 2, 3, hw_rank=3, highway="residential", way_name="16th Ave")
+    _add_edge(G, 2, 101, grade=-0.01, hw_rank=7, highway="primary",
+              way_name="Geary Blvd", traversable=False)
+
+    toggles = Toggles(avoid_bigger_roads=False)
+    routes = _run(G, nodes, toggles=toggles)
+
+    assert any(r.node_ids[-1] == 3 for r in routes), \
+        "With the toggle off, the descent should continue straight to the valley"
+    assert all(101 not in r.node_ids for r in routes), \
+        "Detection-only bigger road was ridden even though it is non-traversable"
 
 
 def test_avoid_bigger_roads_false_allows_crossing():

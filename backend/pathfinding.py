@@ -305,6 +305,14 @@ def find_routes(
                 continue  # no cycles
 
             edge = G[node_id][next_id]
+
+            # Non-traversable edges (bigger roads fetched only for crossing
+            # detection) are never ridden. They still count in the road-type
+            # hard-stop check above via successor ranks; here we just never
+            # expand onto them.
+            if not edge.get("traversable", True):
+                continue
+
             next_data = G.nodes[next_id]
 
             # ── Tunnel toggle ────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import time
 import httpx
 from pathlib import Path
 from .types import OSMNode, OSMWay
+from .config import DETECTION_ROAD_TYPES
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 TIMEOUT_SECONDS = 60
@@ -29,12 +30,17 @@ def _overpass_cache_path(bbox: tuple, road_types: set[str]) -> Path:
     return _OVERPASS_CACHE_DIR / f"{digest}.pkl"
 
 
+def _fetch_road_types(road_types: set[str]) -> set[str]:
+    """Rideable road types plus the bigger tiers we fetch only for crossing detection."""
+    return set(road_types) | DETECTION_ROAD_TYPES
+
+
 def _build_query(bbox: tuple[float, float, float, float], road_types: set[str]) -> str:
     """Overpass QL query: all ways matching road types + their nodes + traffic control nodes."""
     south, west, north, east = bbox
     bbox_str = f"{south},{west},{north},{east}"
 
-    highway_filter = "|".join(sorted(road_types))
+    highway_filter = "|".join(sorted(_fetch_road_types(road_types)))
 
     return f"""
 [out:json][timeout:{TIMEOUT_SECONDS}];
@@ -95,14 +101,17 @@ def fetch_osm_data(
                 is_stop_sign=tags.get("highway") == "stop",
             )
 
-    # Second pass: parse ways
+    # Second pass: parse ways. Keep the whole fetched set (rideable + detection
+    # tiers); traversability is decided downstream so detection roads survive into
+    # the graph for the avoid-bigger/equal-roads toggles.
+    fetch_types = _fetch_road_types(road_types)
     ways: list[OSMWay] = []
     for el in data["elements"]:
         if el["type"] != "way":
             continue
         tags = el.get("tags", {})
         highway = tags.get("highway", "")
-        if highway not in road_types:
+        if highway not in fetch_types:
             continue
 
         node_ids = el.get("nodes", [])

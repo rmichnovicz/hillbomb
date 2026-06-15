@@ -23,6 +23,10 @@ class OSMWay:
     is_tunnel: bool = False
     surface: str = ""  # e.g. "asphalt", "cobblestone", "gravel"
     name: str = ""
+    # False for bigger roads fetched only so the avoid-bigger/equal-roads toggles
+    # can detect (and stop at) a crossing. Non-traversable ways are never ridden;
+    # see DETECTION_ROAD_TYPES in config.py.
+    traversable: bool = True
 
 
 @dataclass

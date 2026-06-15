@@ -127,3 +127,16 @@ DEFAULT_ROAD_TYPES: set[str] = {
     "cycleway", "path",
     "living_street",
 }
+
+# Road tiers always fetched for *detection* of crossings/merges, even when they
+# are not rideable. The "avoid bigger/equal roads" toggles can only stop a
+# descent at a road that exists in the graph, so any road bigger than the
+# rideable ceiling must still be fetched — otherwise a descent crosses straight
+# through it (e.g. 16th Ave crossing Geary). These ways are tagged
+# non-traversable in the graph: present for detection, never ridden.
+DETECTION_ROAD_TYPES: set[str] = {
+    "secondary", "secondary_link",
+    "primary", "primary_link",
+    "trunk", "trunk_link",
+    "motorway", "motorway_link",
+}
