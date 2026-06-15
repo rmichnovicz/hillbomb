@@ -11,7 +11,7 @@ import os
 import pickle
 
 from .overpass import fetch_osm_data
-from .elevation import fetch_elevations
+from .elevation import ElevationService
 from .graph import build_graph
 from .pathfinding import find_routes
 from .physics import simulate_speed_profile
@@ -36,7 +36,10 @@ def main():
         used_ids = {nid for w in ways for nid in w.node_ids}
         active_nodes = {nid: n for nid, n in nodes.items() if nid in used_ids}
         print(f"Fetching elevations for {len(active_nodes)} nodes...")
-        fetch_elevations(active_nodes)
+        coords = [(n.lon, n.lat) for n in active_nodes.values()]
+        elevs = ElevationService().get_elevations(coords)
+        for node, elev in zip(active_nodes.values(), elevs):
+            node.elevation = elev
 
         os.makedirs("backend", exist_ok=True)
         with open(CACHE_PATH, "wb") as f:

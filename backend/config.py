@@ -31,12 +31,15 @@ class SearchConfig:
     elevation_sample_interval_m: float = 10.0
     peak_search_radius_m: float = 75.0
     peak_min_elevation_delta_m: float = 4.0
-    grade_inflection_threshold: float = 0.04
+    grade_inflection_threshold: float = 0.04  # 4% grade change triggers an inflection node
+    # Bridges/tunnels longer than this span are excluded entirely.  A 500 m cutoff
+    # keeps neighborhood bridges while dropping major spans (Golden Gate = 2.7 km,
+    # Bay Bridge = 7 km) that produce flat, near-0-km/h routes.
+    max_bridge_span_m: float = 500.0
 
     # Pathfinding
     max_paths_per_node: int = 3
     max_routes: int = 9999
-    priority_weight_speed: float = 1.0
     # Seed speed for paths starting at peak nodes (m/s).  A rider at a hilltop
     # has some momentum; starting from rest causes shallow summit sections
     # (grade < crr_pathfinding) to bleed speed before the real descent begins.

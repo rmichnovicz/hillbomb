@@ -5,7 +5,6 @@ Node categories added as graph attributes:
   - intersection: degree >= 3 in the undirected sense
   - peak: local elevation maximum within peak_search_radius_m
   - valley: local elevation minimum within peak_search_radius_m
-  - inflection: grade change >= grade_inflection_threshold between adjacent segments
 
 Edges carry: distance_m, grade (rise/run, signed), highway, surface, is_bridge, is_tunnel.
 """
@@ -32,6 +31,49 @@ def _segment_grade(n1: OSMNode, n2: OSMNode) -> float:
     return (n2.elevation - n1.elevation) / dist
 
 
+# Projected node tuple: (node_id, x_m, y_m, lat, lon, elevation)
+_ProjNode = tuple[int, float, float, float, float, float]
+
+
+def _project_nodes(pts: list[tuple[int, float, float, float]]) -> list[_ProjNode]:
+    """Project (id, lat, lon, elev) to local equirectangular metres for bucketing.
+
+    Planar distance matches haversine to <0.1% at city scale; it is only used to
+    choose grid cells, so the radius test itself still uses haversine.
+    """
+    if not pts:
+        return []
+    mean_lat = sum(lat for _, lat, _, _ in pts) / len(pts)
+    m_per_lat = 111_320.0
+    m_per_lon = 111_320.0 * math.cos(math.radians(mean_lat)) or 1.0
+    return [(nid, lon * m_per_lon, lat * m_per_lat, lat, lon, elev)
+            for nid, lat, lon, elev in pts]
+
+
+def _nearby_elevations(proj: list[_ProjNode], radius_m: float) -> dict[int, list[float]]:
+    """Map each node id → elevations of all other nodes within radius_m (haversine).
+
+    A uniform grid of cell size radius_m means only the 3×3 surrounding cells are
+    scanned per node — O(N·k) instead of the previous O(N²) all-pairs scan.
+    """
+    grid: dict[tuple[int, int], list[_ProjNode]] = {}
+    for item in proj:
+        _, x, y, _, _, _ = item
+        grid.setdefault((int(x // radius_m), int(y // radius_m)), []).append(item)
+
+    result: dict[int, list[float]] = {}
+    for nid, x, y, lat, lon, _ in proj:
+        cx, cy = int(x // radius_m), int(y // radius_m)
+        nearby: list[float] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for onid, _ox, _oy, olat, olon, oelev in grid.get((cx + dx, cy + dy), ()):
+                    if onid != nid and _haversine_m(lat, lon, olat, olon) <= radius_m:
+                        nearby.append(oelev)
+        result[nid] = nearby
+    return result
+
+
 def build_graph(
     nodes_by_id: dict[int, OSMNode],
     ways: list[OSMWay],
@@ -52,7 +94,7 @@ def build_graph(
             lat=n.lat, lon=n.lon, elevation=n.elevation,
             is_traffic_signal=n.is_traffic_signal,
             is_stop_sign=n.is_stop_sign,
-            is_peak=False, is_valley=False, is_inflection=False,
+            is_peak=False, is_valley=False, is_intersection=False,
         )
 
     # ── 2. Add directed edges from ways ──────────────────────────────────────
@@ -64,6 +106,10 @@ def build_graph(
         hw_rank = HIGHWAY_RANK.get(way.highway, 3)
 
         if way.is_bridge or way.is_tunnel:
+            n0, n1 = nodes_by_id[nids[0]], nodes_by_id[nids[-1]]
+            span = _haversine_m(n0.lat, n0.lon, n1.lat, n1.lon)
+            if span > config.max_bridge_span_m:
+                continue  # too long (e.g. Golden Gate = 2.7 km); not hill bomb terrain
             # Straight-line segment: only start→end (and reverse if two-way)
             pairs = [(nids[0], nids[-1])]
             if not way.oneway and not way.oneway_reverse:
@@ -115,35 +161,24 @@ def build_graph(
     r = config.peak_search_radius_m
     min_delta = config.peak_min_elevation_delta_m
 
+    # Project once; reuse for both the primary and the wider ridge-top pass.
+    proj = _project_nodes(
+        [(nid, n.lat, n.lon, n.elevation)
+         for nid in G.nodes if (n := nodes_by_id.get(nid)) is not None]
+    )
+    elev_by_id = {nid: elev for nid, _x, _y, _lat, _lon, elev in proj}
+
     # Primary: strict local maxima — node must be at least min_delta above ALL
     # nearby nodes within r.  Works well for isolated hilltops but fails for
     # ridge tops where many nodes share essentially the same elevation.
-    for nid in list(G.nodes):
-        n = nodes_by_id.get(nid)
-        if n is None:
+    primary_nearby = _nearby_elevations(proj, r)
+    for nid, elev in elev_by_id.items():
+        nearby = primary_nearby[nid]
+        if not nearby:
             continue
-        elev = n.elevation
-
-        nearby_elevs = []
-        for other_id in G.nodes:
-            if other_id == nid:
-                continue
-            o = nodes_by_id.get(other_id)
-            if o is None:
-                continue
-            d = _haversine_m(n.lat, n.lon, o.lat, o.lon)
-            if d <= r:
-                nearby_elevs.append(o.elevation)
-
-        if not nearby_elevs:
-            continue
-
-        max_nearby = max(nearby_elevs)
-        min_nearby = min(nearby_elevs)
-
-        if elev - max_nearby >= min_delta:
+        if elev - max(nearby) >= min_delta:
             G.nodes[nid]["is_peak"] = True
-        elif min_nearby - elev >= min_delta:
+        elif min(nearby) - elev >= min_delta:
             G.nodes[nid]["is_valley"] = True
 
     # Secondary: ridge-top / plateau peaks — catches roads that run along a
@@ -154,42 +189,14 @@ def build_graph(
     _WIDE_R = 200.0
     _WIDE_DELTA = min_delta * 3
 
-    for nid in list(G.nodes):
+    wide_nearby = _nearby_elevations(proj, _WIDE_R)
+    for nid, elev in elev_by_id.items():
         if G.nodes[nid].get("is_peak"):
             continue
-        n = nodes_by_id.get(nid)
-        if n is None:
+        nearby = wide_nearby[nid]
+        if not nearby:
             continue
-        elev = n.elevation
-
-        wide_elevs = []
-        for other_id in G.nodes:
-            if other_id == nid:
-                continue
-            o = nodes_by_id.get(other_id)
-            if o is None:
-                continue
-            if _haversine_m(n.lat, n.lon, o.lat, o.lon) <= _WIDE_R:
-                wide_elevs.append(o.elevation)
-
-        if not wide_elevs:
-            continue
-
-        wide_max = max(wide_elevs)
-        wide_min = min(wide_elevs)
-
-        if elev >= wide_max - 0.5 and elev - wide_min >= _WIDE_DELTA:
+        if elev >= max(nearby) - 0.5 and elev - min(nearby) >= _WIDE_DELTA:
             G.nodes[nid]["is_peak"] = True
-
-    # ── 5. Tag grade inflection nodes ────────────────────────────────────────
-    threshold = config.grade_inflection_threshold
-    for nid in G.nodes:
-        in_grades = [G[u][nid]["grade"] for u in G.predecessors(nid) if "grade" in G[u][nid]]
-        out_grades = [G[nid][v]["grade"] for v in G.successors(nid) if "grade" in G[nid][v]]
-        if in_grades and out_grades:
-            avg_in = sum(in_grades) / len(in_grades)
-            avg_out = sum(out_grades) / len(out_grades)
-            if abs(avg_out - avg_in) >= threshold:
-                G.nodes[nid]["is_inflection"] = True
 
     return G
