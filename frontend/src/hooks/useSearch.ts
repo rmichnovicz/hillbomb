@@ -65,8 +65,6 @@ export function useSearch(): UseSearchReturn {
     setIsSearching(true)
 
     async function run() {
-      let doneSeen = false
-      let errorSeen = false
       try {
         const response = await fetch('/search', {
           method: 'POST',
@@ -84,26 +82,34 @@ export function useSearch(): UseSearchReturn {
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        let terminated = false
 
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-
-          // SSE events are delimited by double newlines
+        // SSE events are delimited by double newlines.
+        const drain = (flush = false): boolean => {
           const parts = buffer.split('\n\n')
-          buffer = parts.pop() ?? ''
-
+          buffer = flush ? '' : parts.pop() ?? ''
           for (const part of parts) {
             for (const line of part.split('\n')) {
               const event = parseSSELine(line)
-              if (!event) continue
-              handleEvent(event, () => { doneSeen = true }, () => { errorSeen = true })
+              if (event && handleEvent(event)) return true
             }
           }
+          return false
         }
 
-        if (!doneSeen && !errorSeen) {
+        while (!terminated) {
+          const { done, value } = await reader.read()
+          if (done) {
+            buffer += decoder.decode()
+            terminated = drain(true)
+            break
+          }
+          buffer += decoder.decode(value, { stream: true })
+          terminated = drain()
+        }
+
+        // Stream closed without a `done`/`error` event — treat as incomplete.
+        if (!terminated) {
           setError('Connection lost — results may be incomplete.')
           setIsSearching(false)
         }
@@ -114,45 +120,38 @@ export function useSearch(): UseSearchReturn {
       }
     }
 
-    function handleEvent(event: SSEEvent, onDone?: () => void, onError?: () => void) {
+    /** Apply one event. Returns true if it terminates the stream (done/error). */
+    function handleEvent(event: SSEEvent): boolean {
       switch (event.type) {
         case 'status':
           setStatusMessage(event.message)
-          break
+          return false
 
-        case 'route': {
-          const newRoute: Route = {
-            route_id: event.route_id,
-            start_node_id: event.start_node_id,
-            geometry: event.geometry,
-            metadata: event.metadata,
-            elevations: event.elevations,
-            segment_distances: event.segment_distances,
-            flow_score: event.flow_score,
-            flow_grade: event.flow_grade,
-            surface_pcts: event.surface_pcts,
-            speed_profile: event.speed_profile,
-            top_speed_kmh: event.top_speed_kmh,
-            avg_speed_kmh: event.avg_speed_kmh,
-          }
+        case 'route':
+          // The route event is a structural superset of Route (extra `type`).
           setRoutes(prev =>
-            [...prev, newRoute].sort((a, b) => b.top_speed_kmh - a.top_speed_kmh)
+            [...prev, event].sort((a, b) => b.top_speed_kmh - a.top_speed_kmh)
           )
-          break
-        }
+          return false
+
+        case 'candidate':
+          // Animate-candidates overlay is rendered elsewhere; ignored here.
+          return false
 
         case 'error':
-          onError?.()
           setError(event.message)
           setIsSearching(false)
-          abortRef.current?.abort()
-          break
+          return true
 
         case 'done':
-          onDone?.()
           setIsSearching(false)
           setStatusMessage(null)
-          break
+          return true
+
+        default:
+          // Exhaustiveness check — fails to compile if a new event type is unhandled.
+          event satisfies never
+          return false
       }
     }
 

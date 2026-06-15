@@ -104,3 +104,10 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Loading shimmer for streaming speed stats (used in StartGroupCard).
+   Pairs with `background-size: 200% 100%` on the shimmering element. */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
