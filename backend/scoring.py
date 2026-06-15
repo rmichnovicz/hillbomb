@@ -14,12 +14,15 @@ Letter grade: A≥80, B≥60, C≥40, D≥20, E≥1, F=0.
 """
 
 import networkx as nx
-from .config import SearchConfig
+from .config import SearchConfig, SURFACE_CATEGORIES
 from .types import OSMNode, Route
 
-_ROUGH_SURFACES = {"cobblestone", "sett", "paving_stones"}
-_GRAVEL_SURFACES = {"gravel", "fine_gravel", "pebblestone"}
-_UNPAVED_SURFACES = {"unpaved", "compacted", "dirt", "grass", "sand", "mud"}
+# Derive the penalised surface sets from the single SURFACE_CATEGORIES taxonomy
+# so scoring and the display percentages can't categorise the same tag (e.g.
+# "compacted") differently. "paved" carries no penalty.
+_ROUGH_SURFACES = SURFACE_CATEGORIES["cobblestone"]
+_GRAVEL_SURFACES = SURFACE_CATEGORIES["gravel"]
+_UNPAVED_SURFACES = SURFACE_CATEGORIES["unpaved"]
 
 
 def score_to_grade(score: float) -> str:
