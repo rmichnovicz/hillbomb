@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from .types import OSMNode, OSMWay, Route
 from .config import SearchConfig, RiderParams, Toggles, HIGHWAY_RANK
+from .graph import _haversine_m
 import networkx as nx
 
 
@@ -96,9 +97,10 @@ def _speed_at_node(
     """Estimate arrival speed using a simple kinematic model (no air drag)."""
     g = 9.81
     # grade is rise/run: negative = downhill (propulsive).
-    # Net force = gravity component - rolling resistance.
+    # Net force = gravity component - rolling resistance (always opposes motion;
+    # speed is non-negative so the resistance term is simply +crr).
     # Negate grade so downhill gives positive acceleration.
-    net_accel = g * (-grade - params.crr_pathfinding * math.copysign(1, prev_speed_ms or 1))
+    net_accel = g * (-grade - params.crr_pathfinding)
     # v² = u² + 2as
     v2 = prev_speed_ms ** 2 + 2 * net_accel * dist_m
     return math.sqrt(max(v2, 0.0))
@@ -170,13 +172,31 @@ def find_routes(
         node_ids = path.node_ids
         coords = [[nodes_by_id[n].lon, nodes_by_id[n].lat] for n in node_ids if n in nodes_by_id]
         elevs  = [nodes_by_id[n].elevation for n in node_ids if n in nodes_by_id]
+        # Reuse the distance the graph already stored (and that pathfinding scored
+        # on); fall back to haversine only if the edge is somehow missing.
         dists: list[float] = []
-        for i in range(len(coords) - 1):
-            n1, n2 = nodes_by_id[node_ids[i]], nodes_by_id[node_ids[i + 1]]
-            from .graph import _haversine_m
-            dists.append(_haversine_m(n1.lat, n1.lon, n2.lat, n2.lon))
+        for i in range(len(node_ids) - 1):
+            u, v = node_ids[i], node_ids[i + 1]
+            if G.has_edge(u, v):
+                dists.append(G[u][v]["distance_m"])
+            else:
+                n1, n2 = nodes_by_id[u], nodes_by_id[v]
+                dists.append(_haversine_m(n1.lat, n1.lon, n2.lat, n2.lon))
         route = build_route_from_data(node_ids, coords, elevs, dists, G)
         route.route_id = path.path_id  # preserve the path's ID for traceability
+        return route
+
+    def _emit(path: _Path) -> Route | None:
+        """Mark a path finished and finalize it, bumping the emitted counter.
+
+        Returns the Route to yield, or None if the path is below the minimum
+        length. The caller yields — a generator can't yield from a helper.
+        """
+        nonlocal routes_emitted
+        path.active = False
+        route = _finalize(path)
+        if route is not None:
+            routes_emitted += 1
         return route
 
     # ── Seed from peak nodes ──────────────────────────────────────────────────
@@ -217,36 +237,24 @@ def find_routes(
         # ── Check hard stops ─────────────────────────────────────────────────
         if len(path.node_ids) > 1:  # don't stop at start node
             if toggles.avoid_stoplights and node_data.get("is_traffic_signal"):
-                path.active = False
-                route = _finalize(path)
-                if route:
-                    routes_emitted += 1
+                if route := _emit(path):
                     yield route
                 continue
 
             if toggles.avoid_stop_signs and node_data.get("is_stop_sign"):
-                path.active = False
-                route = _finalize(path)
-                if route:
-                    routes_emitted += 1
+                if route := _emit(path):
                     yield route
                 continue
 
         # ── Check valley termination ─────────────────────────────────────────
         if len(path.node_ids) > 1 and node_data.get("is_valley"):
-            path.active = False
-            route = _finalize(path)
-            if route:
-                routes_emitted += 1
+            if route := _emit(path):
                 yield route
             continue
 
         # ── Check speed floor ────────────────────────────────────────────────
         if len(path.node_ids) > 1 and path.arrival_speed_ms < min_speed_ms:
-            path.active = False
-            route = _finalize(path)
-            if route:
-                routes_emitted += 1
+            if route := _emit(path):
                 yield route
             continue
 
@@ -287,11 +295,8 @@ def find_routes(
                             for nid in G.successors(node_id))):
                 terminate_for_road_type = True
             if terminate_for_road_type:
-                route = _finalize(path)
-                if route:
-                    routes_emitted += 1
+                if route := _emit(path):
                     yield route
-                path.active = False
                 continue
 
         extended = False
@@ -310,11 +315,8 @@ def find_routes(
             active_at_next = node_path_count.get(next_id, 0)
             if active_at_next >= config.max_paths_per_node:
                 # Finalize this path; can't enter the node
-                route = _finalize(path)
-                if route:
-                    routes_emitted += 1
+                if route := _emit(path):
                     yield route
-                path.active = False
                 break
 
             # ── Compute arrival speed ─────────────────────────────────────────
@@ -353,9 +355,7 @@ def find_routes(
         # algorithm could travel from the starting peak.
         if path.active:
             if not extended and len(path.node_ids) > 1:
-                route = _finalize(path)
-                if route:
-                    routes_emitted += 1
+                if route := _emit(path):
                     yield route
             path.sequence_number += 1
             path.active = False

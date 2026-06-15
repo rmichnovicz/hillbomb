@@ -6,9 +6,10 @@ POST /search  →  text/event-stream
 SSE events (each is a JSON object on a `data:` line, double-newline terminated):
   { "type": "status",  "message": "..." }
   { "type": "route",   "route_id": ..., "geometry": {...}, "metadata": {...},
-                       "flow_score": ..., "flow_grade": ... }
-  { "type": "physics", "route_id": ..., "speed_profile": [...],
-                       "top_speed_kmh": ..., "avg_speed_kmh": ... }
+                       "flow_score": ..., "flow_grade": ..., "surface_pcts": {...},
+                       "speed_profile": [...], "top_speed_kmh": ..., "avg_speed_kmh": ... }
+                       ← physics is emitted inline with the route, not as a
+                         separate event
   { "type": "error",   "message": "..." }   ← fatal; stream ends here, no done
   { "type": "done" }                        ← always last on success
 """
@@ -153,15 +154,8 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request
     if req.crr_pathfinding is not None:
         params = replace(params, crr_pathfinding=req.crr_pathfinding)
     config = SearchConfig(max_routes=req.max_routes)
-    toggles = Toggles(
-        avoid_stoplights=req.toggles.avoid_stoplights,
-        avoid_stop_signs=req.toggles.avoid_stop_signs,
-        avoid_bigger_roads=req.toggles.avoid_bigger_roads,
-        avoid_equal_roads=req.toggles.avoid_equal_roads,
-        exclude_tunnels=req.toggles.exclude_tunnels,
-        exclude_bridges=req.toggles.exclude_bridges,
-        animate_candidates=req.toggles.animate_candidates,
-    )
+    # TogglesRequest mirrors the Toggles dataclass field-for-field.
+    toggles = Toggles(**req.toggles.model_dump())
 
     # Cancellation is shared across stages via a threading.Event so it can be read
     # from executor threads (elevation, pathfinding) as well as the event loop.

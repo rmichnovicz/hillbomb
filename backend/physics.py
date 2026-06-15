@@ -76,7 +76,7 @@ def simulate_speed_profile(
 
     speed_kmh = (speed_ms * 3.6).tolist()
     top = max(speed_kmh)
-    avg = float(np.mean(speed_kmh)) if n > 0 else 0.0
+    avg = float(np.mean(speed_kmh))  # n >= 1 here (len==0 returned early above)
 
     return speed_kmh, top, avg
 
