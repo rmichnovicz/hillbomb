@@ -71,6 +71,7 @@ def _add_edge(
     hw_rank: int = 3,
     surface: str = "asphalt",
     is_tunnel: bool = False,
+    is_bridge: bool = False,
     way_name: str = "Test Street",
     traversable: bool = True,
 ) -> None:
@@ -78,7 +79,7 @@ def _add_edge(
         u, v,
         grade=grade, distance_m=dist,
         highway=highway, hw_rank=hw_rank, surface=surface,
-        is_bridge=False, is_tunnel=is_tunnel, way_name=way_name,
+        is_bridge=is_bridge, is_tunnel=is_tunnel, way_name=way_name,
         traversable=traversable,
     )
 
@@ -764,6 +765,46 @@ def test_include_tunnels_uses_tunnel_edge():
     _add_edge(G, 2, 3, is_tunnel=True)
 
     toggles = Toggles(exclude_tunnels=False)
+    routes = _run(G, nodes, toggles=toggles)
+    assert any(3 in r.node_ids for r in routes)
+
+
+def test_exclude_bridges_skips_bridge_edges():
+    """With exclude_bridges=True, no route may include a bridge edge."""
+    G = nx.DiGraph()
+    nodes = {}
+    for i, (south_m, elev, is_peak, is_valley) in enumerate([
+        (0,   100.0, True,  False),
+        (150, 85.0,  False, False),
+        (300, 70.0,  False, True),
+    ], start=1):
+        node = _make_node(i, south_m, elev, is_peak=is_peak, is_valley=is_valley)
+        nodes[i] = node
+        _add_node(G, node, is_peak=is_peak, is_valley=is_valley)
+    _add_edge(G, 1, 2, grade=-0.10, dist=150.0, is_bridge=False)
+    _add_edge(G, 2, 3, grade=-0.10, dist=150.0, is_bridge=True)   # bridge
+
+    toggles = Toggles(exclude_bridges=True)
+    routes = _run(G, nodes, toggles=toggles)
+    # No route should reach node 3 (only accessible via bridge)
+    assert all(3 not in r.node_ids for r in routes)
+
+
+def test_include_bridges_uses_bridge_edge():
+    G = nx.DiGraph()
+    nodes = {}
+    for i, (south_m, elev, is_peak, is_valley) in enumerate([
+        (0,   100.0, True,  False),
+        (150, 85.0,  False, False),
+        (300, 70.0,  False, True),
+    ], start=1):
+        node = _make_node(i, south_m, elev, is_peak=is_peak, is_valley=is_valley)
+        nodes[i] = node
+        _add_node(G, node, is_peak=is_peak, is_valley=is_valley)
+    _add_edge(G, 1, 2)
+    _add_edge(G, 2, 3, is_bridge=True)
+
+    toggles = Toggles(exclude_bridges=False)
     routes = _run(G, nodes, toggles=toggles)
     assert any(3 in r.node_ids for r in routes)
 

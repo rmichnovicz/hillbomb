@@ -315,8 +315,10 @@ def find_routes(
 
             next_data = G.nodes[next_id]
 
-            # ── Tunnel toggle ────────────────────────────────────────────────
+            # ── Tunnel / bridge toggles ──────────────────────────────────────
             if toggles.exclude_tunnels and edge.get("is_tunnel"):
+                continue
+            if toggles.exclude_bridges and edge.get("is_bridge"):
                 continue
 
             # ── Node cap ─────────────────────────────────────────────────────
