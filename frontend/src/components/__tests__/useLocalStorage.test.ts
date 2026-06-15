@@ -1,17 +1,21 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useSavedRoutes } from '../../hooks/useLocalStorage'
 import type { Route } from '../../types'
 
 const makeRoute = (id: string, topSpeed = 40): Route => ({
   route_id: id,
+  start_node_id: 1,
   geometry: { type: 'LineString', coordinates: [[-122.4, 37.7]] },
   metadata: { name: `Route ${id}`, length_m: 300, total_descent_m: 20, avg_grade_pct: -6, primary_highway: 'residential' },
   elevations: [100, 90],
   segment_distances: [150],
   flow_score: 85,
   flow_grade: 'A',
+  surface_pcts: { paved: 100 },
+  speed_profile: [0, topSpeed],
   top_speed_kmh: topSpeed,
+  avg_speed_kmh: topSpeed / 2,
 })
 
 describe('useSavedRoutes', () => {

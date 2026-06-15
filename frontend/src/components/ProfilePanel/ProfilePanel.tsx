@@ -28,7 +28,8 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointEleme
 
 interface ProfilePanelProps {
   route: Route
-  onScrubPosition?: (fraction: number) => void
+  /** Called with the 0–1 scrub fraction, or null when the cursor leaves the chart. */
+  onScrubPosition?: (fraction: number | null) => void
 }
 
 export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
@@ -85,8 +86,8 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
       tooltip: {
         callbacks: {
           label: ctx => {
-            if (ctx.datasetIndex === 0) return `${Math.round(ctx.parsed.y)} m`
-            return `${Math.round(ctx.parsed.y)} km/h`
+            if (ctx.datasetIndex === 0) return `${Math.round(ctx.parsed.y ?? 0)} m`
+            return `${Math.round(ctx.parsed.y ?? 0)} km/h`
           },
         },
       },
@@ -117,8 +118,10 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
     },
   }
 
+  // Clear the scrub (null) on leave so the map pin is removed, rather than
+  // snapping it back to the route start (position 0).
   const handleMouseLeave = useCallback(() => {
-    onScrubPosition?.(0)
+    onScrubPosition?.(null)
   }, [onScrubPosition])
 
   return (

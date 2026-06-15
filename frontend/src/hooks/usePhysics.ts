@@ -21,6 +21,11 @@ export interface PhysicsResult {
 export function usePhysics(route: Route | null, params: RiderParams): PhysicsResult | null {
   return useMemo(() => {
     if (!route || route.elevations.length < 2) return null
-    return simulateSpeedProfile(route.elevations, route.segment_distances, params)
+    const { profile, topSpeed, avgSpeed } = simulateSpeedProfile(
+      route.elevations,
+      route.segment_distances,
+      params,
+    )
+    return { speed_profile: profile, top_speed_kmh: topSpeed, avg_speed_kmh: avgSpeed }
   }, [route, params])
 }

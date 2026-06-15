@@ -14,6 +14,7 @@ const DEFAULT_TOGGLES: Toggles = {
   avoid_bigger_roads: true,
   avoid_equal_roads: true,
   exclude_tunnels: false,
+  exclude_bridges: false,
   animate_candidates: false,
 }
 
@@ -61,11 +62,11 @@ describe('SearchControls', () => {
     expect(onStop).toHaveBeenCalledOnce()
   })
 
-  it('renders checkboxes for all 6 toggles and 4 terrain types when advanced settings is open', () => {
+  it('renders checkboxes for all 7 toggles and 4 terrain types when advanced settings is open', () => {
     renderControls()
     openAdvanced()
-    // 6 behaviour toggles + 4 surface categories = 10
-    expect(screen.getAllByRole('checkbox')).toHaveLength(10)
+    // 7 behaviour toggles + 4 surface categories = 11
+    expect(screen.getAllByRole('checkbox')).toHaveLength(11)
   })
 
   it('hides checkboxes when advanced settings is collapsed', () => {

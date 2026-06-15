@@ -119,13 +119,24 @@ describe('useSearch hook', () => {
   })
 
   it('updates statusMessage on status events', async () => {
+    // No `done` here: `done` intentionally clears the status, so we observe the
+    // last status the stream delivered before it closed.
+    vi.stubGlobal('fetch', makeFakeFetch([
+      { type: 'status', message: 'Building graph...' },
+    ]))
+    const { result } = renderHook(() => useSearch())
+    await act(async () => { result.current.startSearch(BASE_SEARCH) })
+    expect(result.current.statusMessage).toBe('Building graph...')
+  })
+
+  it('clears statusMessage on done', async () => {
     vi.stubGlobal('fetch', makeFakeFetch([
       { type: 'status', message: 'Building graph...' },
       { type: 'done' },
     ]))
     const { result } = renderHook(() => useSearch())
     await act(async () => { result.current.startSearch(BASE_SEARCH) })
-    expect(result.current.statusMessage).toBe('Building graph...')
+    expect(result.current.statusMessage).toBeNull()
   })
 
   it('appends routes as they arrive', async () => {

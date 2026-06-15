@@ -19,6 +19,7 @@ const LONGBOARDER: RiderParams = {
   drag_coefficient: 0.75,
   frontal_area_m2: 0.35,
   crr_physics: 0.012,
+  crr_pathfinding: 0.020,
 }
 
 const CYCLIST_DROPS: RiderParams = {
@@ -26,6 +27,7 @@ const CYCLIST_DROPS: RiderParams = {
   drag_coefficient: 0.70,
   frontal_area_m2: 0.32,
   crr_physics: 0.003,
+  crr_pathfinding: 0.006,
 }
 
 describe('simulateSpeedProfile — output shape', () => {

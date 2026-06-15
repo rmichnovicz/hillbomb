@@ -88,9 +88,9 @@ export default function App() {
     if (!activeRoute || !livePhysics) return activeRoute
     return {
       ...activeRoute,
-      speed_profile: livePhysics.profile,
-      top_speed_kmh: livePhysics.topSpeed,
-      avg_speed_kmh: livePhysics.avgSpeed,
+      speed_profile: livePhysics.speed_profile,
+      top_speed_kmh: livePhysics.top_speed_kmh,
+      avg_speed_kmh: livePhysics.avg_speed_kmh,
     }
   }, [activeRoute, livePhysics])
 
