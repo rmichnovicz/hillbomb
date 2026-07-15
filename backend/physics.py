@@ -81,16 +81,52 @@ def simulate_speed_profile(
     return speed_kmh, top, avg
 
 
+_Segment = tuple[list[int], list[float], list[float], list[float]]
+
+
+def _trim_leading_stall(segment: _Segment) -> _Segment | None:
+    """
+    Drop leading nodes the rider never moves through.
+
+    After a split, a segment begins at the stall node (speed 0) and may be
+    followed by a flat/uphill run the rider can't climb from rest — the sim keeps
+    speed at 0 across all of it until the road tips downhill again. Those leading
+    0 km/h nodes are not part of the rideable descent, so we trim them, keeping
+    the single crest node right before motion resumes as the route's start (which
+    naturally begins at rest, like any descent).
+
+    Returns the trimmed segment, or None if the rider never moves at all (the
+    whole segment is stalled — nothing rideable to emit).
+    """
+    node_ids, elevations, distances, speed = segment
+    first_moving = next((i for i, s in enumerate(speed) if s > 0.0), None)
+    if first_moving is None:
+        return None  # rider never gets going; drop the segment
+    start = max(first_moving - 1, 0)  # keep the crest node just before motion
+    if start == 0:
+        return segment
+    return (
+        node_ids[start:],
+        elevations[start:],
+        distances[start:],
+        speed[start:],
+    )
+
+
 def split_route_on_zero_speed(
     node_ids: list[int],
     elevations: list[float],
     distances: list[float],
     speed_profile_kmh: list[float],
-) -> list[tuple[list[int], list[float], list[float], list[float]]]:
+) -> list[_Segment]:
     """
     Split a route wherever the physics sim transitions from moving (>0 km/h) to
     exactly 0 km/h. The sliced speed profile is already correct for each sub-segment
     because the sim restarts from rest at the stop point.
+
+    Each split segment is then trimmed of the leading stall (see
+    _trim_leading_stall) so it begins where the rider actually starts rolling
+    rather than at the stall point and the flat/uphill that follows it.
 
     Returns a list of (node_ids, elevations, distances, speed_profile_kmh) tuples.
     Returns the original as a single-element list when no stop events occur.
@@ -111,11 +147,11 @@ def split_route_on_zero_speed(
     if not split_points:
         return [(node_ids, elevations, distances, speed_profile_kmh)]
 
-    segments: list[tuple[list[int], list[float], list[float], list[float]]] = []
+    raw_segments: list[_Segment] = []
     prev = 0
     for sp in split_points:
         # Segment covers nodes [prev..sp] inclusive → sp-prev distances
-        segments.append((
+        raw_segments.append((
             node_ids[prev:sp + 1],
             elevations[prev:sp + 1],
             distances[prev:sp],
@@ -125,11 +161,15 @@ def split_route_on_zero_speed(
 
     # Tail segment [prev..end]
     if prev < n:
-        segments.append((
+        raw_segments.append((
             node_ids[prev:],
             elevations[prev:],
             distances[prev:],
             speed_profile_kmh[prev:],
         ))
 
-    return segments
+    # The first segment starts at the original descent peak (already rolling), so
+    # only the post-stall segments need trimming; running the trim over all of
+    # them is harmless and keeps the logic uniform.
+    trimmed = (_trim_leading_stall(seg) for seg in raw_segments)
+    return [seg for seg in trimmed if seg is not None]

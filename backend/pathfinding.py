@@ -25,6 +25,23 @@ import networkx as nx
 # search stage to well under a millisecond.
 _CANCEL_CHECK_INTERVAL = 256
 
+# A descent that makes a near-180° turn onto a climbing edge is almost always an
+# artifact of divided-road geometry: two one-way carriageways that merge into a
+# two-way road, where a fast path can hairpin onto the opposing carriageway and
+# coast back uphill. Reversals sharper than this (degrees of heading change) onto
+# an uphill edge are refused. A switchback also reverses heading but keeps
+# descending, so the accompanying grade > 0 test spares it.
+_UTURN_TURN_DEG = 135.0
+
+
+def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial compass bearing in degrees (0–360) from point 1 to point 2."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    x = math.sin(dlon) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dlon)
+    return math.degrees(math.atan2(x, y)) % 360.0
+
 
 def build_route_from_data(
     node_ids: list[int],
@@ -70,6 +87,20 @@ def build_route_from_data(
                 if route_name:
                     break
 
+    # Stop signs / traffic signals on the path, including the start and end nodes
+    # (pathfinding/scoring skip the start, but we still surface it for the rider).
+    stops: list[dict] = []
+    for i, nid in enumerate(node_ids):
+        nd = G.nodes.get(nid, {})
+        if nd.get("is_traffic_signal"):
+            stop_type = "traffic_signal"
+        elif nd.get("is_stop_sign"):
+            stop_type = "stop_sign"
+        else:
+            continue
+        coord = coordinates[i] if i < len(coordinates) else [nd.get("lon", 0.0), nd.get("lat", 0.0)]
+        stops.append({"type": stop_type, "coord": coord})
+
     return Route(
         route_id=str(uuid.uuid4()),
         node_ids=node_ids,
@@ -83,6 +114,7 @@ def build_route_from_data(
         total_descent_m=total_descent,
         avg_grade_pct=avg_grade,
         surface_distances=surface_distances,
+        stops=stops,
     )
 
 
@@ -122,6 +154,10 @@ class _Path:
     # Used as a primary sort key so type-consistent continuations are explored
     # (and emitted) before type-changing detours; dedup then discards the latter.
     type_changes: int = 0
+    # Name of the road this descent started on, for the stay_on_initial_road
+    # toggle. None until the first edge off the seed is traversed; thereafter the
+    # path may only extend onto edges with this way_name.
+    road_name: str | None = None
 
 
 # ── Main algorithm ────────────────────────────────────────────────────────────
@@ -135,7 +171,8 @@ def find_routes(
     should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[Route]:
     """
-    Greedy descent from all peak nodes. Yields Route objects as paths finalize.
+    Greedy descent from every node where the road starts dropping. Yields Route
+    objects as paths finalize.
 
     should_cancel, if given, is polled inside the main expansion loop; when it
     becomes true the search stops generating immediately (the generator returns).
@@ -152,8 +189,9 @@ def find_routes(
     heap: list[tuple] = []
     routes_emitted = 0
 
-    # Nodes already reached by any active path. A peak seed whose node is already
-    # in this set would produce a sub-route of an existing path, so it is skipped.
+    # Nodes already reached by any active path. A seed whose start node is already
+    # in this set sits downhill of an existing descent, so starting there would
+    # just re-walk a sub-route of that descent; it is skipped.
     visited_nodes: set[int] = set()
 
     def _push(path: _Path, node_id: int, is_extending: bool) -> None:
@@ -199,14 +237,29 @@ def find_routes(
             routes_emitted += 1
         return route
 
-    # ── Seed from peak nodes ──────────────────────────────────────────────────
-    for nid, data in G.nodes(data=True):
-        if not data.get("is_peak"):
+    # ── Seed from descent starts ──────────────────────────────────────────────
+    # A path may begin at any node where the road tips downhill steeply enough to
+    # keep accelerating — i.e. a traversable outgoing edge whose grade is steeper
+    # than rolling resistance (a coasting rider speeds up rather than stalls).
+    # We do NOT restrict seeds to detected peaks: a good descent can begin partway
+    # down a road or along a ridge that never registers as a local maximum. Every
+    # candidate start is pushed; the visited_nodes guard in the main loop then
+    # drops any seed that a higher descent already passed through, so each
+    # independent drop yields one route, started at its highest point (seeds carry
+    # equal speed, so the priority queue pops them high-elevation first).
+    seed_grade_threshold = -params.crr_pathfinding
+    for nid in G.nodes:
+        has_descent_start = any(
+            G[nid][s].get("traversable", True)
+            and G[nid][s].get("grade", 0.0) < seed_grade_threshold
+            for s in G.successors(nid)
+        )
+        if not has_descent_start:
             continue
         path = _Path(
             path_id=str(uuid.uuid4()),
             node_ids=[nid],
-            arrival_speed_ms=config.peak_seed_speed_ms,
+            arrival_speed_ms=config.seed_speed_ms,
         )
         paths_by_id[path.path_id] = path
         node_path_count[nid] = node_path_count.get(nid, 0) + 1
@@ -225,9 +278,12 @@ def find_routes(
         if path is None or not path.active or path.sequence_number != seq:
             continue  # stale entry
 
-        # If this is a peak seed and the node was already reached by another path,
-        # the descent from here is already covered — skip to avoid sub-routes.
+        # If this is a seed and the node was already reached by another path, the
+        # descent from here is already covered — skip to avoid sub-routes. Release
+        # the node-cap slot reserved for this seed at push time so a dormant seed
+        # doesn't permanently occupy capacity at a node real paths pass through.
         if len(path.node_ids) == 1 and node_id in visited_nodes:
+            node_path_count[node_id] = node_path_count.get(node_id, 1) - 1
             path.active = False
             continue
 
@@ -268,11 +324,17 @@ def find_routes(
             current_hw = arriving_edge.get("highway", "")
             current_surface = arriving_edge.get("surface", "")
             current_way_name = arriving_edge.get("way_name", "")
+            prev_data = G.nodes.get(prev_id, {})
+            in_bearing = _bearing(
+                prev_data.get("lat", 0.0), prev_data.get("lon", 0.0),
+                node_data.get("lat", 0.0), node_data.get("lon", 0.0),
+            )
         else:
             current_hw_rank = 0
             current_hw = ""
             current_surface = ""
             current_way_name = ""
+            in_bearing = None
 
         # ── Road type hard stops (pre-expansion) ────────────────────────────
         # Check before iterating neighbors so iteration order can't cause a
@@ -321,6 +383,30 @@ def find_routes(
             if toggles.exclude_bridges and edge.get("is_bridge"):
                 continue
 
+            # ── Stay-on-initial-road toggle ──────────────────────────────────
+            # Once a descent has established a road name (first edge off the
+            # seed), it may only continue onto edges sharing that name. Different
+            # OSM ways combine freely as long as the name matches.
+            edge_name = edge.get("way_name", "")
+            if (toggles.stay_on_initial_road
+                    and path.road_name is not None
+                    and edge_name != path.road_name):
+                continue
+
+            # ── No U-turn onto a climb ───────────────────────────────────────
+            # Refuse a hairpin reversal onto an uphill edge (the opposing
+            # carriageway of a divided road at its merge, etc.). Switchbacks
+            # reverse heading too but keep descending, so the grade > 0 test
+            # leaves them alone. Only applies once a heading exists (len >= 2).
+            if in_bearing is not None and edge.get("grade", 0.0) > 0:
+                out_bearing = _bearing(
+                    node_data.get("lat", 0.0), node_data.get("lon", 0.0),
+                    next_data.get("lat", 0.0), next_data.get("lon", 0.0),
+                )
+                turn = abs((out_bearing - in_bearing + 180.0) % 360.0 - 180.0)
+                if turn > _UTURN_TURN_DEG:
+                    continue
+
             # ── Node cap ─────────────────────────────────────────────────────
             active_at_next = node_path_count.get(next_id, 0)
             if active_at_next >= config.max_paths_per_node:
@@ -351,6 +437,9 @@ def find_routes(
                 total_dist_m=path.total_dist_m + dist,
                 total_descent_m=path.total_descent_m + max(descent, 0),
                 type_changes=path.type_changes + type_changed,
+                # First edge off the seed establishes the road name; later edges
+                # inherit it (and matched it via the guard above).
+                road_name=path.road_name if path.road_name is not None else edge_name,
             )
             paths_by_id[new_path.path_id] = new_path
             node_path_count[next_id] = node_path_count.get(next_id, 0) + 1

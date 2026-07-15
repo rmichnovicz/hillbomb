@@ -20,6 +20,11 @@ class Toggles:
     avoid_equal_roads: bool = False
     exclude_tunnels: bool = False
     exclude_bridges: bool = False
+    # When set, a descent may only continue onto ways sharing the same name as the
+    # road it started on. Multiple OSM ways combine freely as long as the name
+    # matches; the first edge off the seed establishes the name. Unnamed start
+    # roads constrain to other unnamed ways (OSM has no name to match on).
+    stay_on_initial_road: bool = False
     animate_candidates: bool = False
 
 
@@ -40,12 +45,14 @@ class SearchConfig:
     # Pathfinding
     max_paths_per_node: int = 3
     max_routes: int = 9999
-    # Seed speed for paths starting at peak nodes (m/s).  A rider at a hilltop
-    # has some momentum; starting from rest causes shallow summit sections
-    # (grade < crr_pathfinding) to bleed speed before the real descent begins.
-    # ~15 km/h lets paths traverse gentle openers without creating false routes
-    # on truly flat ground (speed floor still fires before min_route_length_m).
-    peak_seed_speed_ms: float = 5.6  # ≈ 20 km/h
+    # Initial speed for a freshly seeded path (m/s).  Seeds start wherever the
+    # road first tips downhill (see find_routes), not only at detected peaks, and
+    # a rider rolling into a descent already carries some momentum.  Starting
+    # from rest would let a shallow opener (grade just past crr_pathfinding) bleed
+    # to the speed floor and terminate the route before the real drop begins;
+    # ~20 km/h carries paths through gentle openers without manufacturing routes
+    # on flat ground (the speed floor still fires before min_route_length_m).
+    seed_speed_ms: float = 5.6  # ≈ 20 km/h
 
     # Physics
     air_density_kg_m3: float = 1.225
@@ -71,7 +78,7 @@ RIDER_PROFILES: dict[str, RiderParams] = {
         min_route_length_m=60,
     ),
     "cyclist_upright": RiderParams(
-        weight_kg=85,
+        weight_kg=80,
         drag_coefficient=0.88,
         frontal_area_m2=0.42,
         crr_physics=0.004,
@@ -118,25 +125,14 @@ SURFACE_CATEGORIES: dict[str, set[str]] = {
     "cobblestone": {"cobblestone", "sett", "paving_stones", "unhewn_cobblestone", "cobblestone:flattened"},
 }
 
-# Road types included by default in search
-DEFAULT_ROAD_TYPES: set[str] = {
-    "tertiary", "tertiary_link",
-    "unclassified",
-    "residential",
-    "service",
-    "cycleway", "path",
-    "living_street",
-}
-
-# Road tiers always fetched for *detection* of crossings/merges, even when they
-# are not rideable. The "avoid bigger/equal roads" toggles can only stop a
-# descent at a road that exists in the graph, so any road bigger than the
-# rideable ceiling must still be fetched — otherwise a descent crosses straight
-# through it (e.g. 16th Ave crossing Geary). These ways are tagged
-# non-traversable in the graph: present for detection, never ridden.
-DETECTION_ROAD_TYPES: set[str] = {
-    "secondary", "secondary_link",
-    "primary", "primary_link",
-    "trunk", "trunk_link",
-    "motorway", "motorway_link",
-}
+# Road types eligible to be ridden when a request doesn't pin an explicit set.
+# This is the FULL classified network (every highway class we fetch); the actual
+# size cut is made by max_road_rank, surfaced in the UI as the "Max road size"
+# slider. Keeping the default universe complete is what lets that slider reach all
+# the way up to primary/trunk/motorway — a narrower set here would silently shadow
+# its upper steps (the slider could raise the rank cap but the road would still be
+# filtered out by membership). max_road_rank defaults to secondary (see
+# SearchRequest), and the avoid-bigger/equal-road toggles still stop a descent at
+# busier crossings, so the out-of-the-box ride is unchanged; the user can now
+# opt all the way up when they want it.
+DEFAULT_ROAD_TYPES: set[str] = set(HIGHWAY_RANK)

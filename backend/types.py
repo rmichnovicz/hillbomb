@@ -23,9 +23,10 @@ class OSMWay:
     is_tunnel: bool = False
     surface: str = ""  # e.g. "asphalt", "cobblestone", "gravel"
     name: str = ""
-    # False for bigger roads fetched only so the avoid-bigger/equal-roads toggles
-    # can detect (and stop at) a crossing. Non-traversable ways are never ridden;
-    # see DETECTION_ROAD_TYPES in config.py.
+    # The full road network is fetched on every search; this flag marks whether a
+    # way may actually be ridden. Bigger roads are kept non-traversable so the
+    # avoid-bigger/equal-roads toggles can detect (and stop at) a crossing without
+    # ever routing onto them. Set in main.py; see overpass.ROAD_NETWORK_TYPES.
     traversable: bool = True
 
 
@@ -51,6 +52,9 @@ class Route:
     flow_grade: str = "A"
     # Surface tag → total distance (m) along that surface
     surface_distances: dict[str, float] = field(default_factory=dict)
+    # Stop signs / traffic signals on this route, for map display. Includes the
+    # start and end nodes. Each: {"type": "stop_sign"|"traffic_signal", "coord": [lon, lat]}.
+    stops: list[dict] = field(default_factory=list)
     # Filled in by physics.py
     top_speed_kmh: float = 0.0
     avg_speed_kmh: float = 0.0

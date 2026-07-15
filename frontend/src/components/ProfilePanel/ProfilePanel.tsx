@@ -77,6 +77,10 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
     ],
   }
 
+  const elevMin = Math.min(...elevations)
+  const elevMax = Math.max(...elevations)
+  const elevPad = Math.max((elevMax - elevMin) * 0.15, 2)
+
   const options: ChartOptions<'bar' | 'line'> = {
     responsive: true,
     maintainAspectRatio: false,
@@ -97,6 +101,8 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
       y: {
         type: 'linear',
         position: 'left',
+        min: elevMin - elevPad,
+        max: elevMax + elevPad,
         title: { display: true, text: 'Elevation (m)', font: { size: 10 } },
         ticks: { font: { size: 10 } },
       },
@@ -127,7 +133,7 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
   return (
     <div style={{ padding: '12px 16px 8px' }}>
       <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '6px' }}>
-        {metadata.name} &middot; {Math.round(metadata.total_descent_m)} m descent &middot; {Math.round(metadata.avg_grade_pct * 100)}% avg grade
+        {metadata.name} &middot; {Math.round(metadata.total_descent_m)} m descent &middot; {Math.round(metadata.avg_grade_pct)}% avg grade
       </div>
       <div style={{ height: '140px' }} onMouseLeave={handleMouseLeave}>
         <Chart ref={chartRef as never} type="bar" data={data} options={options} />

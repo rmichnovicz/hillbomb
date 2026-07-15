@@ -11,6 +11,12 @@ export interface RouteGeometry {
   coordinates: [number, number][]  // [lon, lat] pairs
 }
 
+/** A stop sign or traffic signal located on a route (including its start/end). */
+export interface RouteStop {
+  type: 'stop_sign' | 'traffic_signal'
+  coord: [number, number]  // [lon, lat]
+}
+
 /** A fully populated route — physics fields are always present (included in the route SSE event). */
 export interface Route {
   route_id: string
@@ -25,6 +31,8 @@ export interface Route {
   flow_grade: string
   /** Surface category → percentage of route distance (paved/gravel/unpaved/cobblestone/unknown). */
   surface_pcts: Record<string, number>
+  /** Stop signs / traffic signals on the route, in path order (start and end included). */
+  stops: RouteStop[]
   speed_profile: number[]
   top_speed_kmh: number
   avg_speed_kmh: number
@@ -58,7 +66,7 @@ export const RIDER_PROFILES: Record<RiderProfile, RiderParams> = {
     crr_pathfinding: 0.012,
   },
   cyclist_upright: {
-    weight_kg: 85,
+    weight_kg: 80,
     drag_coefficient: 0.88,
     frontal_area_m2: 0.42,
     crr_physics: 0.004,
@@ -80,6 +88,7 @@ export interface Toggles {
   avoid_equal_roads: boolean
   exclude_tunnels: boolean
   exclude_bridges: boolean
+  stay_on_initial_road: boolean
   animate_candidates: boolean
 }
 
@@ -95,8 +104,10 @@ export interface SearchOptions {
 
 // SSE event shapes emitted by the backend
 export type SSEEvent =
+  | { type: 'queued'; position: number }
+  | { type: 'busy'; message: string }
   | { type: 'status'; message: string }
-  | { type: 'route'; route_id: string; start_node_id: number; geometry: RouteGeometry; metadata: RouteMetadata; elevations: number[]; segment_distances: number[]; flow_score: number; flow_grade: string; surface_pcts: Record<string, number>; speed_profile: number[]; top_speed_kmh: number; avg_speed_kmh: number }
+  | { type: 'route'; route_id: string; start_node_id: number; geometry: RouteGeometry; metadata: RouteMetadata; elevations: number[]; segment_distances: number[]; flow_score: number; flow_grade: string; surface_pcts: Record<string, number>; stops: RouteStop[]; speed_profile: number[]; top_speed_kmh: number; avg_speed_kmh: number }
   | { type: 'candidate'; geometry: RouteGeometry }
   | { type: 'error'; message: string }
   | { type: 'done' }

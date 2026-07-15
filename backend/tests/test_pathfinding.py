@@ -2,7 +2,8 @@
 Tests for pathfinding.py — greedy descent algorithm.
 
 Key invariants under test:
-  - Routes seed from peak nodes only
+  - Routes seed from any descent start (a node whose road tips downhill steeply
+    enough to keep accelerating), deduped so each drop yields one route
   - Paths terminate at valleys, traffic signals, stop signs, speed floor,
     node cap, bigger-road crossings
   - Routes shorter than min_route_length_m are silently discarded
@@ -168,22 +169,39 @@ class TestSpeedAtNode:
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
 
-def test_no_peaks_produces_no_routes():
-    G, nodes = _linear_graph(3)
-    # Remove peak flag from all nodes
-    for nid in G.nodes:
-        G.nodes[nid]["is_peak"] = False
+def test_no_descent_produces_no_routes():
+    """A graph with no downhill edges has no descent starts, so no routes seed.
+
+    Peak tags are irrelevant to seeding now — what matters is whether the road
+    actually drops. An all-uphill chain (every edge gains elevation) yields none.
+    """
+    G, nodes = _linear_graph(3, grade=+0.10)  # uphill the whole way
+    # Tag node 1 a peak anyway to prove seeding ignores the flag.
+    G.nodes[1]["is_peak"] = True
     routes = _run(G, nodes)
     assert routes == []
 
 
-def test_seeds_only_from_peak_nodes():
-    """All emitted routes must start at a node tagged is_peak."""
+def test_seeds_from_descent_start_even_without_peak_tag():
+    """A route seeds wherever the road tips downhill, regardless of is_peak."""
     G, nodes = _linear_graph(4)
+    # Clear every peak flag: seeding must rely on grade, not the tag.
+    for nid in G.nodes:
+        G.nodes[nid]["is_peak"] = False
     routes = _run(G, nodes)
-    for r in routes:
-        assert G.nodes[r.node_ids[0]].get("is_peak"), \
-            f"Route started at non-peak node {r.node_ids[0]}"
+    assert routes, "Expected a route to seed from the downhill start despite no peak tag"
+
+
+def test_seed_dedup_starts_route_at_highest_point():
+    """
+    Every node on a continuous descent is a candidate seed, but the visited guard
+    must collapse them to a single route that starts at the highest node — lower
+    seeds sit downhill of it and are dropped.
+    """
+    G, nodes = _linear_graph(4)  # 1(top) → 2 → 3 → 4(valley), all downhill
+    routes = _run(G, nodes)
+    assert len(routes) == 1, f"Expected one deduped route, got {len(routes)}: {[r.node_ids for r in routes]}"
+    assert routes[0].node_ids[0] == 1, "Route must start at the highest descent point"
 
 
 # ── Valley termination ────────────────────────────────────────────────────────
@@ -324,7 +342,7 @@ def test_speed_floor_terminates_on_steep_uphill():
     Node 4 must never appear — the path can't reach it.
 
     Math (crr_pathfinding=0.012):
-      seed speed = 5.6 m/s (peak_seed_speed_ms)
+      seed speed = 5.6 m/s (seed_speed_ms)
       edge 1→2: net_accel = 9.81*(0.10-0.012) = 0.863 m/s²
                 v² = 5.6² + 2*0.863*150 = 290.3  → v₂ ≈ 17.0 m/s
       edge 2→3: net_accel = 9.81*(-0.30-0.012) = -3.061 m/s²
@@ -510,6 +528,66 @@ def test_avoid_equal_roads_stops_when_turning_onto_different_equal_road():
         "Route turned onto a different equal-class road despite avoid_equal_roads=True"
 
 
+def test_stay_on_initial_road_combines_same_named_ways():
+    """
+    With stay_on_initial_road=True a descent may roll across several OSM ways as
+    long as they share the road name — different way objects, same street.
+
+        1(peak) --Lincoln Blvd--> 2 --Lincoln Blvd--> 3 --Lincoln Blvd--> 4(valley)
+
+    (Edges 2→3 and 3→4 are separate ways in OSM but all named "Lincoln Blvd".)
+    The full descent to the valley at node 4 must survive the toggle.
+    """
+    G, nodes = _linear_graph(4)
+    for u, v in [(1, 2), (2, 3), (3, 4)]:
+        G[u][v]["way_name"] = "Lincoln Blvd"
+
+    toggles = Toggles(stay_on_initial_road=True)
+    routes = _run(G, nodes, toggles=toggles)
+
+    assert any(r.node_ids == [1, 2, 3, 4] for r in routes), \
+        "Expected the descent to combine same-named ways down to the valley"
+
+
+def test_stay_on_initial_road_stops_at_differently_named_road():
+    """
+    With stay_on_initial_road=True a descent that can only continue by turning
+    onto a differently-named road must terminate at the junction.
+
+        1(peak) --Lincoln Blvd--> 2 --Lincoln Blvd--> 3
+                                                       |
+                                          Bowley St    +--> 4(valley)
+
+    Lincoln Blvd ends at node 3; only Bowley St continues. The route must end at
+    node 3 and never reach node 4.
+    """
+    G, nodes = _linear_graph(4)
+    G[1][2]["way_name"] = "Lincoln Blvd"
+    G[2][3]["way_name"] = "Lincoln Blvd"
+    G[3][4]["way_name"] = "Bowley St"
+
+    toggles = Toggles(stay_on_initial_road=True)
+    routes = _run(G, nodes, toggles=toggles)
+
+    assert any(r.node_ids[-1] == 3 for r in routes), \
+        "Expected route to terminate at node 3 where Lincoln Blvd ends"
+    assert all(r.node_ids[-1] != 4 for r in routes), \
+        "Route turned onto Bowley St despite stay_on_initial_road=True"
+
+
+def test_stay_on_initial_road_false_allows_road_change():
+    """The default (toggle off) lets the descent cross onto a differently-named road."""
+    G, nodes = _linear_graph(4)
+    G[1][2]["way_name"] = "Lincoln Blvd"
+    G[2][3]["way_name"] = "Lincoln Blvd"
+    G[3][4]["way_name"] = "Bowley St"
+
+    routes = _run(G, nodes, toggles=Toggles(stay_on_initial_road=False))
+
+    assert any(r.node_ids == [1, 2, 3, 4] for r in routes), \
+        "With the toggle off the route should roll onto Bowley St to the valley"
+
+
 def test_bigger_cross_road_stops_descent_on_same_road():
     """
     The 16th Ave × Geary case: a descent stays on one residential way that runs
@@ -614,6 +692,80 @@ def test_avoid_bigger_roads_false_allows_crossing():
     toggles = Toggles(avoid_bigger_roads=False)
     routes = _run(G, nodes, toggles=toggles)
     assert any(r.node_ids[-1] == 3 for r in routes)
+
+
+# ── No U-turn onto a climb (divided-road merge) ───────────────────────────────
+
+def _build_2d(spec: dict[int, tuple[float, float, float, bool, bool]]):
+    """Build a graph from {id: (lat, lon, elevation, is_peak, is_valley)}.
+
+    Unlike _make_node (single meridian), this places nodes at arbitrary lon so the
+    pathfinder's heading/bearing logic can be exercised.
+    """
+    G = nx.DiGraph()
+    nodes: dict[int, OSMNode] = {}
+    for nid, (lat, lon, elev, is_peak, is_valley) in spec.items():
+        n = OSMNode(id=nid, lat=lat, lon=lon, elevation=elev,
+                    is_traffic_signal=False, is_stop_sign=False)
+        nodes[nid] = n
+        G.add_node(nid, lat=lat, lon=lon, elevation=elev,
+                   is_traffic_signal=False, is_stop_sign=False,
+                   is_peak=is_peak, is_valley=is_valley,
+                   is_inflection=False, is_intersection=False)
+    return G, nodes
+
+
+def test_uturn_onto_climb_is_blocked():
+    """
+    A divided road descends south to a merge (node 3); the opposing one-way
+    carriageway (node 4) heads back NORTH and UPHILL — a ~180° reversal onto a
+    climb. The fast descent must stop at the merge rather than hairpin back up the
+    other side.
+
+        1(peak) --south,down--> 2 --south,down--> 3(merge)
+                                                  |
+                                  4 <--north, UP--+   (opposing carriageway)
+    """
+    spec = {
+        1: (_BASE_LAT,                       _BASE_LON,          100.0, True,  False),
+        2: (_BASE_LAT - 150 * _LAT_PER_M,    _BASE_LON,          85.0,  False, False),
+        3: (_BASE_LAT - 300 * _LAT_PER_M,    _BASE_LON,          70.0,  False, False),
+        4: (_BASE_LAT - 150 * _LAT_PER_M,    _BASE_LON + 0.0005, 85.0,  False, False),
+    }
+    G, nodes = _build_2d(spec)
+    G.nodes[3]["is_intersection"] = True
+    _add_edge(G, 1, 2, grade=-0.10, dist=150.0)
+    _add_edge(G, 2, 3, grade=-0.10, dist=150.0)
+    _add_edge(G, 3, 4, grade=+0.10, dist=150.0)  # back uphill, opposite carriageway
+
+    routes = _run(G, nodes)
+
+    assert any(r.node_ids == [1, 2, 3] for r in routes), \
+        "Descent should stop at the merge (node 3), not U-turn back uphill"
+    assert all(4 not in r.node_ids for r in routes), \
+        "Descent hairpinned onto the climbing opposite carriageway (node 4)"
+
+
+def test_switchback_reversal_still_descending_is_allowed():
+    """
+    A switchback reverses heading ~180° but keeps DESCENDING. Only reversals onto
+    a climb are blocked, so the descent must roll through to the valley at node 4.
+    """
+    spec = {
+        1: (_BASE_LAT,                       _BASE_LON,          100.0, True,  False),
+        2: (_BASE_LAT - 150 * _LAT_PER_M,    _BASE_LON,          85.0,  False, False),
+        3: (_BASE_LAT - 300 * _LAT_PER_M,    _BASE_LON,          70.0,  False, False),
+        4: (_BASE_LAT - 150 * _LAT_PER_M,    _BASE_LON + 0.0005, 55.0,  False, True),
+    }
+    G, nodes = _build_2d(spec)
+    _add_edge(G, 1, 2, grade=-0.10, dist=150.0)
+    _add_edge(G, 2, 3, grade=-0.10, dist=150.0)
+    _add_edge(G, 3, 4, grade=-0.10, dist=150.0)  # hairpin, but still dropping
+
+    routes = _run(G, nodes)
+
+    assert any(r.node_ids == [1, 2, 3, 4] for r in routes), \
+        "Switchback (sharp reversal, still descending) was wrongly blocked"
 
 
 # ── Node cap ──────────────────────────────────────────────────────────────────

@@ -41,7 +41,7 @@ HAWK_HILL_ROAD_TYPES = {
 @pytest.mark.integration
 def test_conzelman_road_ways_present_in_osm():
     """Overpass must return at least one way named 'Conzelman Road' in this bbox."""
-    nodes, ways = fetch_osm_data(HAWK_HILL_BBOX, HAWK_HILL_ROAD_TYPES)
+    nodes, ways = fetch_osm_data(HAWK_HILL_BBOX)
     conzelman = [w for w in ways if "Conzelman" in w.name]
     assert conzelman, (
         "No Conzelman Road ways returned from Overpass. "
@@ -55,7 +55,10 @@ def test_hawk_hill_routes_found():
     Full pipeline: fetch OSM → enrich elevation → build graph → pathfind.
     Expects at least one route on Conzelman Road with real descent and length.
     """
-    nodes, ways = fetch_osm_data(HAWK_HILL_BBOX, HAWK_HILL_ROAD_TYPES)
+    nodes, ways = fetch_osm_data(HAWK_HILL_BBOX)
+    # The full road network is fetched; mark which tiers are rideable here.
+    for w in ways:
+        w.traversable = w.highway in HAWK_HILL_ROAD_TYPES
 
     elev_svc = ElevationService()
     node_list = list(nodes.values())

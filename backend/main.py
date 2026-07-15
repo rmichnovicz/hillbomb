@@ -4,6 +4,11 @@ FastAPI app with SSE streaming search endpoint.
 POST /search  →  text/event-stream
 
 SSE events (each is a JSON object on a `data:` line, double-newline terminated):
+  { "type": "queued",  "position": N }     ← 1-based place in the elevation-fetch
+                                             line; repeats as the line advances.
+                                             Only cold (uncached) searches see it.
+  { "type": "busy",    "message": "..." }  ← the queue is full; request shed
+                                             before any work. Stream ends here.
   { "type": "status",  "message": "..." }
   { "type": "route",   "route_id": ..., "geometry": {...}, "metadata": {...},
                        "flow_score": ..., "flow_grade": ..., "surface_pcts": {...},
@@ -17,6 +22,7 @@ SSE events (each is a JSON object on a `data:` line, double-newline terminated):
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -33,6 +39,7 @@ from pydantic import BaseModel, field_validator
 
 from .config import DEFAULT_ROAD_TYPES, HIGHWAY_RANK, RIDER_PROFILES, SURFACE_CATEGORIES, SearchConfig, Toggles
 from .elevation import ElevationService, SearchCancelled
+from .gate import RequestGate
 from .graph import build_graph
 from .overpass import fetch_osm_data
 from .pathfinding import build_route_from_data, find_routes
@@ -51,6 +58,14 @@ def _jaccard(a: frozenset[int], b: frozenset[int]) -> float:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.elevation = ElevationService()
+    # Caps concurrent cold elevation fetches; the rest queue (see gate.py).
+    # 2 keeps us within Overpass/S3 etiquette and bounds bandwidth + memory.
+    # Beyond max_waiting queued, new cold searches are shed with a "busy" event
+    # instead of growing the backlog unbounded.
+    app.state.gate = RequestGate(
+        max_concurrent=int(os.environ.get("HILLBOMB_MAX_CONCURRENT_ELEVATION", "2")),
+        max_waiting=int(os.environ.get("HILLBOMB_MAX_QUEUE", "20")),
+    )
     yield
 
 
@@ -73,6 +88,7 @@ class TogglesRequest(BaseModel):
     avoid_equal_roads: bool = False
     exclude_tunnels: bool = False
     exclude_bridges: bool = False
+    stay_on_initial_road: bool = False
     animate_candidates: bool = False
 
 
@@ -82,7 +98,7 @@ class SearchRequest(BaseModel):
     rider_profile: str = "cyclist_upright"
     toggles: TogglesRequest = TogglesRequest()
     max_routes: int = 500
-    max_road_rank: int = 9                   # cap by HIGHWAY_RANK; 9 = all roads
+    max_road_rank: int = 6                   # cap by HIGHWAY_RANK; 6 = secondary (UI slider default), 9 = all roads
     allowed_surface_categories: list[str] | None = None  # None = all surfaces allowed
     crr_pathfinding: float | None = None     # overrides profile default when set
 
@@ -103,16 +119,24 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _surface_category(tag: str) -> str:
+    """Map a raw OSM surface tag to a display/filter category.
+
+    An empty tag (untagged way) or any value matching no known category maps to
+    "unknown" — so the "unknown" surface category covers both cases uniformly.
+    """
+    for cat_name, tags in SURFACE_CATEGORIES.items():
+        if tag in tags:
+            return cat_name
+    return "unknown"
+
+
 def _surface_pcts(route) -> dict[str, float]:
     """Categorize raw OSM surface tags into display categories and return percentages."""
     total = route.length_m or 1.0
     cat_dist: dict[str, float] = {}
     for tag, dist in route.surface_distances.items():
-        matched = "unknown"
-        for cat_name, tags in SURFACE_CATEGORIES.items():
-            if tag in tags:
-                matched = cat_name
-                break
+        matched = _surface_category(tag)
         cat_dist[matched] = cat_dist.get(matched, 0.0) + dist
     return {cat: round(d / total * 100, 1) for cat, d in sorted(cat_dist.items(), key=lambda x: -x[1])}
 
@@ -138,6 +162,7 @@ def _route_event(route) -> str:
         "flow_score": round(route.flow_score, 1),
         "flow_grade": route.flow_grade,
         "surface_pcts": _surface_pcts(route),
+        "stops": route.stops,
         "speed_profile": [round(v, 1) for v in route.speed_profile],
         "top_speed_kmh": round(route.top_speed_kmh, 1),
         "avg_speed_kmh": round(route.avg_speed_kmh, 1),
@@ -146,7 +171,7 @@ def _route_event(route) -> str:
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request: Request) -> AsyncGenerator[str, None]:
+async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: RequestGate, request: Request) -> AsyncGenerator[str, None]:
     loop = asyncio.get_event_loop()
 
     road_types = set(req.road_types) if req.road_types else DEFAULT_ROAD_TYPES
@@ -190,7 +215,7 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request
         yield _sse({"type": "status", "message": "Querying Overpass API..."})
         t0 = time.perf_counter()
         nodes, ways = await loop.run_in_executor(
-            None, fetch_osm_data, req.bbox, road_types
+            None, fetch_osm_data, req.bbox
         )
         timings["overpass"] = time.perf_counter() - t0
         log.info("stage overpass: %.0f ms (%d nodes, %d ways)",
@@ -201,19 +226,20 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request
         # Decide traversability per way. Bigger roads (and surface/rank-excluded
         # ways) stay in the graph so the avoid-bigger/equal-roads toggles can stop
         # a descent at them, but are tagged non-traversable so they're never ridden.
-        allowed_tags: set[str] | None = None
-        if req.allowed_surface_categories is not None:
-            allowed_tags = set()
-            for cat in req.allowed_surface_categories:
-                allowed_tags |= SURFACE_CATEGORIES.get(cat, set())
+        allowed_cats: set[str] | None = (
+            set(req.allowed_surface_categories)
+            if req.allowed_surface_categories is not None
+            else None
+        )
 
         def _is_rideable(w) -> bool:
             if w.highway not in road_types:
                 return False
             if HIGHWAY_RANK.get(w.highway, 3) > req.max_road_rank:
                 return False
-            # Ways with no surface tag are always allowed.
-            if allowed_tags is not None and w.surface and w.surface not in allowed_tags:
+            # Surface gate. Untagged ways (and any unrecognized tag) fall into the
+            # "unknown" category, so excluding it drops surface-unknown roads too.
+            if allowed_cats is not None and _surface_category(w.surface) not in allowed_cats:
                 return False
             return True
 
@@ -223,19 +249,61 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, request
         used_ids = {nid for w in ways for nid in w.node_ids}
         active_nodes = {nid: n for nid, n in nodes.items() if nid in used_ids}
 
-        yield _sse({"type": "status",
-                    "message": f"Fetching elevation for {len(active_nodes)} nodes..."})
-        coords = [(n.lon, n.lat) for n in active_nodes.values()]
-        t0 = time.perf_counter()
-        elevs = await loop.run_in_executor(
-            None, elevation_svc.get_elevations, coords, cancel_event.is_set
-        )
-        timings["elevation"] = time.perf_counter() - t0
-        log.info("stage elevation: %.0f ms (%d nodes, res=%sm)",
-                 timings["elevation"] * 1000, len(coords), elevation_svc.resolution_m)
+        # Elevation is only needed for nodes we might actually ride — i.e. nodes
+        # on at least one traversable way. Non-traversable ways (bigger roads,
+        # surface/rank-excluded) are kept in the graph for crossing detection,
+        # which uses only road rank + way name, never elevation. So we query
+        # elevation for the traversable subset and leave the rest at 0.0.
+        # The cache file is still keyed on the FULL network geometry (used_ids,
+        # which is toggle-independent), so re-searching the same area with
+        # different surface/road filters reuses every coordinate already fetched.
+        traversable_ids = {nid for w in ways if w.traversable for nid in w.node_ids}
+        needed_nodes = {nid: n for nid, n in active_nodes.items() if nid in traversable_ids}
+
+        coords = [(n.lon, n.lat) for n in needed_nodes.values()]
+        cache_coords = [(n.lon, n.lat) for n in active_nodes.values()]
+
+        # Elevation is the pipeline's slowest stage and the one that overwhelms
+        # the box under concurrent load, so cold fetches pass through an admission
+        # gate. A warm search (nothing missing from cache) skips the gate entirely
+        # and stays instant even while cold fetches are queued behind it.
+        ticket = None
+        if elevation_svc.missing_coords(coords, cache_coords):
+            ticket = gate.enqueue()
+            if ticket is None:
+                # Line is full — shed rather than pile on. Client can retry.
+                yield _sse({"type": "busy",
+                            "message": "Server is at capacity right now. "
+                                       "Please try your search again in a moment."})
+                return
+        try:
+            if ticket is not None:
+                async for position in gate.wait(ticket, is_done):
+                    yield _sse({"type": "queued", "position": position})
+                if await is_done():
+                    return
+
+            yield _sse({"type": "status",
+                        "message": f"Fetching elevation for {len(needed_nodes)} nodes..."})
+            t0 = time.perf_counter()
+            elevs = await loop.run_in_executor(
+                None,
+                lambda: elevation_svc.get_elevations(
+                    coords, cancel_event.is_set, cache_coords
+                ),
+            )
+            timings["elevation"] = time.perf_counter() - t0
+        finally:
+            # Release the slot (or drop from the line if we never got one) so the
+            # next queued search starts its fetch while we move on to the CPU stages.
+            if ticket is not None:
+                gate.release(ticket)
+        log.info("stage elevation: %.0f ms (%d of %d nodes, res=%sm)",
+                 timings["elevation"] * 1000, len(coords), len(active_nodes),
+                 elevation_svc.resolution_m)
         if await is_done():
             return
-        for node, elev in zip(active_nodes.values(), elevs):
+        for node, elev in zip(needed_nodes.values(), elevs):
             node.elevation = elev
         config.elevation_sample_interval_m = elevation_svc.resolution_m
 
@@ -357,7 +425,7 @@ async def search(req: SearchRequest, request: Request):
                    f"Valid options: {list(RIDER_PROFILES)}",
         )
     return StreamingResponse(
-        _pipeline(req, request.app.state.elevation, request),
+        _pipeline(req, request.app.state.elevation, request.app.state.gate, request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

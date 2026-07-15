@@ -123,6 +123,23 @@ export function useSearch(): UseSearchReturn {
     /** Apply one event. Returns true if it terminates the stream (done/error). */
     function handleEvent(event: SSEEvent): boolean {
       switch (event.type) {
+        case 'queued':
+          // Server is busy fetching elevation for other searches; we're in line.
+          setStatusMessage(
+            event.position === 1
+              ? 'Waiting for a free slot…'
+              : `Busy — you're #${event.position} in line…`
+          )
+          return false
+
+        case 'busy':
+          // Queue is full; no work was done. Surface as a retryable message and
+          // end the search — the "Search this area" button is the retry.
+          setError(event.message)
+          setStatusMessage(null)
+          setIsSearching(false)
+          return true
+
         case 'status':
           setStatusMessage(event.message)
           return false

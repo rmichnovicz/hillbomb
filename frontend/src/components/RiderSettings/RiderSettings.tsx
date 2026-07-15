@@ -8,6 +8,7 @@ interface RiderSettingsProps {
   onProfileChange: (profile: RiderProfile) => void
   onParamsChange: (params: RiderParams) => void
   isSearching: boolean
+  activeRouteId?: string | null
 }
 
 interface SliderRowProps {
@@ -41,12 +42,16 @@ function SliderRow({ label, value, min, max, step, format, onChange }: SliderRow
   )
 }
 
-export function RiderSettings({ profile, params, onProfileChange, onParamsChange, isSearching }: RiderSettingsProps) {
+export function RiderSettings({ profile, params, onProfileChange, onParamsChange, isSearching, activeRouteId }: RiderSettingsProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   useEffect(() => {
     if (isSearching) setIsOpen(false)
   }, [isSearching])
+
+  useEffect(() => {
+    if (activeRouteId) setIsOpen(false)
+  }, [activeRouteId])
 
   const set = (key: keyof RiderParams, value: number) =>
     onParamsChange({ ...params, [key]: value })
@@ -83,7 +88,7 @@ export function RiderSettings({ profile, params, onProfileChange, onParamsChange
                 key={p}
                 onClick={() => {
                   onProfileChange(p)
-                  onParamsChange(RIDER_PROFILES[p])
+                  onParamsChange({ ...RIDER_PROFILES[p], weight_kg: params.weight_kg })
                 }}
                 aria-pressed={profile === p}
                 style={{

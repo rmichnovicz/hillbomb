@@ -16,7 +16,7 @@ from .graph import build_graph
 from .pathfinding import find_routes
 from .physics import simulate_speed_profile
 from .scoring import compute_flow_score
-from .config import DEFAULT_ROAD_TYPES, SearchConfig, RIDER_PROFILES, Toggles
+from .config import DEFAULT_ROAD_TYPES, HIGHWAY_RANK, SearchConfig, RIDER_PROFILES, Toggles
 
 BBOX = (37.748, -122.454, 37.758, -122.440)  # Twin Peaks, SF
 CACHE_PATH = "backend/_cache_twins.pkl"
@@ -30,7 +30,7 @@ def main():
         print(f"[cache] Loaded {len(nodes)} nodes, {len(ways)} ways")
     else:
         print("Querying Overpass API...")
-        nodes, ways = fetch_osm_data(BBOX, DEFAULT_ROAD_TYPES)
+        nodes, ways = fetch_osm_data(BBOX)
         print(f"  → {len(nodes)} nodes, {len(ways)} ways")
 
         used_ids = {nid for w in ways for nid in w.node_ids}
@@ -47,6 +47,16 @@ def main():
         print("  → cached to", CACHE_PATH)
 
     # ── 2. Graph ──────────────────────────────────────────────────────────────
+    # Mirror main.py's default traversability: the full road network is fetched,
+    # but a way is rideable only if it's in DEFAULT_ROAD_TYPES and within the
+    # default max_road_rank (secondary). Bigger roads stay in the graph as
+    # non-traversable detection edges (also re-tags ways loaded from a stale cache).
+    _DEFAULT_MAX_ROAD_RANK = 6  # secondary; matches SearchRequest.max_road_rank
+    for w in ways:
+        w.traversable = (
+            w.highway in DEFAULT_ROAD_TYPES
+            and HIGHWAY_RANK.get(w.highway, 3) <= _DEFAULT_MAX_ROAD_RANK
+        )
     config = SearchConfig()
     print("Building graph...")
     G = build_graph(nodes, ways, config)

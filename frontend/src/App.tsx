@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearch } from './hooks/useSearch'
+import { usePersistedState } from './hooks/usePersistedState'
 import { usePhysics } from './hooks/usePhysics'
 import { useIsMobile } from './hooks/useIsMobile'
 import { HillbombMap } from './components/Map/HillbombMap'
@@ -7,7 +8,7 @@ import { RouteList } from './components/RouteList/RouteList'
 import type { SortMode } from './components/RouteList/RouteList'
 import { ProfilePanel } from './components/ProfilePanel/ProfilePanel'
 import { RiderSettings } from './components/RiderSettings/RiderSettings'
-import { SearchControls, DEFAULT_ROAD_SIZE_STEP, ROAD_SIZE_STEPS, ALL_SURFACE_CATEGORIES } from './components/SearchControls/SearchControls'
+import { SearchControls, DEFAULT_ROAD_SIZE_STEP, ROAD_SIZE_STEPS } from './components/SearchControls/SearchControls'
 import type { SurfaceCategory } from './components/SearchControls/SearchControls'
 import { RIDER_PROFILES } from './types'
 import type { RiderProfile, RiderParams, SearchOptions, Toggles, StartGroup } from './types'
@@ -19,8 +20,12 @@ const DEFAULT_TOGGLES: Toggles = {
   avoid_equal_roads: true,
   exclude_tunnels: false,
   exclude_bridges: false,
+  stay_on_initial_road: true,
   animate_candidates: false,
 }
+
+const DEFAULT_ALLOWED_SURFACES: SurfaceCategory[] = ['paved']
+const DEFAULT_MIN_DISTANCE_M = 500
 
 export default function App() {
   const { isSearching, routes, statusMessage, error, startSearch, stopSearch } = useSearch()
@@ -30,22 +35,31 @@ export default function App() {
   const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null)
   const [hoveredRouteId, setHoveredRouteId] = useState<string | null>(null)
   const [scrubPosition, setScrubPosition] = useState<number | null>(null)
-  const [sortMode, setSortMode] = useState<SortMode>('longest')
-  const [riderProfile, setRiderProfile] = useState<RiderProfile>('cyclist_upright')
-  const [riderParams, setRiderParams] = useState<RiderParams>(RIDER_PROFILES.cyclist_upright)
-  const [toggles, setToggles] = useState<Toggles>(DEFAULT_TOGGLES)
-  const [roadSizeStep, setRoadSizeStep] = useState(DEFAULT_ROAD_SIZE_STEP)
-  const [allowedSurfaces, setAllowedSurfaces] = useState<SurfaceCategory[]>([...ALL_SURFACE_CATEGORIES])
+  // User-tunable settings are persisted across refreshes (versioned keys).
+  const [sortMode, setSortMode] = usePersistedState<SortMode>('hillbomb_sortMode_v1', 'longest')
+  const [riderProfile, setRiderProfile] = usePersistedState<RiderProfile>('hillbomb_riderProfile_v1', 'cyclist_upright')
+  const [riderParams, setRiderParams] = usePersistedState<RiderParams>('hillbomb_riderParams_v1', RIDER_PROFILES.cyclist_upright)
+  const [toggles, setToggles] = usePersistedState<Toggles>('hillbomb_toggles_v1', DEFAULT_TOGGLES)
+  const [roadSizeStep, setRoadSizeStep] = usePersistedState('hillbomb_roadSizeStep_v1', DEFAULT_ROAD_SIZE_STEP)
+  const [allowedSurfaces, setAllowedSurfaces] = usePersistedState<SurfaceCategory[]>('hillbomb_allowedSurfaces_v1', DEFAULT_ALLOWED_SURFACES)
   const [currentBbox, setCurrentBbox] = useState<[number, number, number, number]>([37.74, -122.47, 37.80, -122.40])
   const [hasSearched, setHasSearched] = useState(false)
+  const [minDistanceM, setMinDistanceM] = usePersistedState('hillbomb_minDistanceM_v1', DEFAULT_MIN_DISTANCE_M)
+  const [lastSuccessMaxLengthM, setLastSuccessMaxLengthM] = useState<number | null>(null)
+  const prevIsSearchingRef = useRef(false)
 
   const isMobile = useIsMobile(640)
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false)
 
+  const filteredRoutes = useMemo(
+    () => minDistanceM > 0 ? routes.filter(r => r.metadata.length_m >= minDistanceM) : routes,
+    [routes, minDistanceM],
+  )
+
   // Group routes by start_node_id; sort groups by selected sort mode
   const groups = useMemo((): StartGroup[] => {
     const map = new Map<string, typeof routes>()
-    for (const r of routes) {
+    for (const r of filteredRoutes) {
       const key = String(r.start_node_id)
       const arr = map.get(key) ?? []
       arr.push(r)
@@ -65,15 +79,30 @@ export default function App() {
       })
     }
     return result.sort((a, b) => sortValue(b.routes[0]) - sortValue(a.routes[0]))
-  }, [routes, sortMode])
+  }, [filteredRoutes, sortMode])
 
-  // When the active group changes, auto-select the best route in that group.
+  // Flattened sort order: route_id → global rank across all groups, in the order
+  // the sidebar shows them. Used by the map to resolve overlapping route clicks
+  // to the route that sorts first.
+  const routeOrder = useMemo(() => {
+    const order = new Map<string, number>()
+    let i = 0
+    for (const g of groups) for (const r of g.routes) order.set(r.route_id, i++)
+    return order
+  }, [groups])
+
+  // When the active group changes, auto-select the best route in that group —
+  // unless the current route already belongs to it (e.g. selected directly from
+  // the map), in which case keep that specific route.
   // Intentionally excludes `groups` from deps — only re-seeds on group switch,
   // not on every physics update that re-sorts group members.
   useEffect(() => {
     if (!activeGroupId) { setActiveRouteId(null); return }
     const group = groups.find(g => g.startNodeId === activeGroupId)
-    setActiveRouteId(group?.routes[0]?.route_id ?? null)
+    if (!group) return
+    setActiveRouteId(prev =>
+      group.routes.some(r => r.route_id === prev) ? prev : (group.routes[0]?.route_id ?? null),
+    )
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGroupId])
 
@@ -93,6 +122,18 @@ export default function App() {
       avg_speed_kmh: livePhysics.avg_speed_kmh,
     }
   }, [activeRoute, livePhysics])
+
+  // Track search completion to auto-adjust min distance slider
+  useEffect(() => {
+    const wasSearching = prevIsSearchingRef.current
+    prevIsSearchingRef.current = isSearching
+    if (!wasSearching || isSearching || !hasSearched) return
+    if (routes.length > 0) {
+      setLastSuccessMaxLengthM(Math.max(...routes.map(r => r.metadata.length_m)))
+    } else if (lastSuccessMaxLengthM !== null) {
+      setMinDistanceM(Math.round(lastSuccessMaxLengthM / 50) * 50)
+    }
+  }, [isSearching, hasSearched, routes, lastSuccessMaxLengthM])
 
   // Auto-expand mobile panel when routes arrive or a group is selected
   const hasRoutes = routes.length > 0
@@ -130,20 +171,29 @@ export default function App() {
     setScrubPosition(null)
   }, [])
 
+  // Selecting a path from the map: set its group and the specific route together
+  // (no toggle). The guarded re-seed effect keeps this exact route.
+  const handleSelectPath = useCallback((routeId: string, startNodeId: string) => {
+    setActiveGroupId(startNodeId)
+    setActiveRouteId(routeId)
+    setScrubPosition(null)
+  }, [])
+
   if (isMobile) {
     return (
       <div style={{ position: 'relative', width: '100%', height: '100dvh', overflow: 'hidden', fontFamily: 'system-ui, sans-serif' }}>
         {/* Map: fills entire screen */}
         <div style={{ position: 'absolute', inset: 0 }}>
           <HillbombMap
-            routes={routes}
+            routes={filteredRoutes}
             activeGroupId={activeGroupId}
             activeRouteId={activeRouteId}
             hoveredGroupId={hoveredGroupId}
             hoveredRouteId={hoveredRouteId}
+            routeOrder={routeOrder}
             onBoundsChange={setCurrentBbox}
             onSelectGroup={handleSelectGroup}
-            onSelectRoute={handleSelectRoute}
+            onSelectPath={handleSelectPath}
             scrubPosition={scrubPosition}
           />
         </div>
@@ -251,27 +301,32 @@ export default function App() {
             )}
           </button>
 
-          {/* Scrollable panel content */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <RouteList
-              groups={groups}
-              activeGroupId={activeGroupId}
-              activeRouteId={activeRouteId}
-              onSelectGroup={handleSelectGroup}
-              onSelectRoute={handleSelectRoute}
-              onHoverGroup={setHoveredGroupId}
-              onHoverRoute={setHoveredRouteId}
-              sortMode={sortMode}
-              onSortModeChange={setSortMode}
-              statusMessage={statusMessage}
-              isSearching={isSearching}
-              error={error}
-              hasSearched={hasSearched}
-              fillHeight={false}
-            />
+          {/* Panel content: route list scrolls, controls pinned at bottom */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
+            {/* Route list — grows to fill space, scrolls internally */}
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <RouteList
+                groups={groups}
+                activeGroupId={activeGroupId}
+                activeRouteId={activeRouteId}
+                onSelectGroup={handleSelectGroup}
+                onSelectRoute={handleSelectRoute}
+                onHoverGroup={setHoveredGroupId}
+                onHoverRoute={setHoveredRouteId}
+                sortMode={sortMode}
+                onSortModeChange={setSortMode}
+                statusMessage={statusMessage}
+                isSearching={isSearching}
+                error={error}
+                hasSearched={hasSearched}
+                fillHeight={true}
+              />
+            </div>
+
+            {/* Profile panel — pinned below route list */}
             {activeRouteWithPhysics && (
-              <div style={{ borderTop: '1px solid #e5e7eb', background: '#fff' }}>
+              <div style={{ flexShrink: 0, borderTop: '1px solid #e5e7eb', background: '#fff' }}>
                 <ProfilePanel
                   route={activeRouteWithPhysics}
                   onScrubPosition={setScrubPosition}
@@ -279,25 +334,35 @@ export default function App() {
               </div>
             )}
 
-            <RiderSettings
-              profile={riderProfile}
-              params={riderParams}
-              onProfileChange={setRiderProfile}
-              onParamsChange={setRiderParams}
-              isSearching={isSearching}
-            />
+            {/* Rider settings — pinned, collapsible */}
+            <div style={{ flexShrink: 0 }}>
+              <RiderSettings
+                profile={riderProfile}
+                params={riderParams}
+                onProfileChange={setRiderProfile}
+                onParamsChange={setRiderParams}
+                isSearching={isSearching}
+                activeRouteId={activeRouteId}
+              />
+            </div>
 
-            <SearchControls
-              isSearching={isSearching}
-              toggles={toggles}
-              onTogglesChange={setToggles}
-              roadSizeStep={roadSizeStep}
-              onRoadSizeChange={setRoadSizeStep}
-              allowedSurfaces={allowedSurfaces}
-              onAllowedSurfacesChange={setAllowedSurfaces}
-              onSearch={handleSearch}
-              onStop={stopSearch}
-            />
+            {/* Search controls — always visible at bottom */}
+            <div style={{ flexShrink: 0 }}>
+              <SearchControls
+                isSearching={isSearching}
+                toggles={toggles}
+                onTogglesChange={setToggles}
+                roadSizeStep={roadSizeStep}
+                onRoadSizeChange={setRoadSizeStep}
+                allowedSurfaces={allowedSurfaces}
+                onAllowedSurfacesChange={setAllowedSurfaces}
+                minDistanceM={minDistanceM}
+                onMinDistanceChange={setMinDistanceM}
+                onSearch={handleSearch}
+                onStop={stopSearch}
+                activeRouteId={activeRouteId}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -309,14 +374,15 @@ export default function App() {
       {/* Map */}
       <div style={{ flex: 1, position: 'relative' }}>
         <HillbombMap
-          routes={routes}
+          routes={filteredRoutes}
           activeGroupId={activeGroupId}
           activeRouteId={activeRouteId}
           hoveredGroupId={hoveredGroupId}
           hoveredRouteId={hoveredRouteId}
+          routeOrder={routeOrder}
           onBoundsChange={setCurrentBbox}
           onSelectGroup={handleSelectGroup}
-          onSelectRoute={handleSelectRoute}
+          onSelectPath={handleSelectPath}
           scrubPosition={scrubPosition}
         />
       </div>
@@ -372,6 +438,7 @@ export default function App() {
           onProfileChange={setRiderProfile}
           onParamsChange={setRiderParams}
           isSearching={isSearching}
+          activeRouteId={activeRouteId}
         />
 
         {/* Search controls + toggles */}
@@ -383,8 +450,11 @@ export default function App() {
           onRoadSizeChange={setRoadSizeStep}
           allowedSurfaces={allowedSurfaces}
           onAllowedSurfacesChange={setAllowedSurfaces}
+          minDistanceM={minDistanceM}
+          onMinDistanceChange={setMinDistanceM}
           onSearch={handleSearch}
           onStop={stopSearch}
+          activeRouteId={activeRouteId}
         />
       </div>
     </div>

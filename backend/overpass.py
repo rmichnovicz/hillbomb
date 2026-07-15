@@ -14,33 +14,35 @@ import time
 import httpx
 from pathlib import Path
 from .types import OSMNode, OSMWay
-from .config import DETECTION_ROAD_TYPES
+from .config import HIGHWAY_RANK
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 TIMEOUT_SECONDS = 60
+
+# The whole classified road network is fetched on every search, independent of
+# the rider's rideable road_types. Traversability (what may actually be ridden)
+# is decided per-way downstream in main.py; bigger roads still need to be in the
+# graph so the avoid-bigger/equal-roads toggles can stop a descent at a crossing.
+# Keying the fetch on geometry alone (not road_types) also lets re-searches with
+# different toggles or road settings reuse the cached OSM data.
+ROAD_NETWORK_TYPES: frozenset[str] = frozenset(HIGHWAY_RANK)
 
 _CACHE_ROOT = Path(os.environ.get("HILLBOMB_CACHE_DIR", str(Path.home() / ".cache" / "hillbomb")))
 _OVERPASS_CACHE_DIR = _CACHE_ROOT / "overpass"
 _CACHE_TTL = int(os.environ.get("HILLBOMB_CACHE_TTL", "86400"))  # 24 h
 
 
-def _overpass_cache_path(bbox: tuple, road_types: set[str]) -> Path:
-    key = f"{bbox}:{':'.join(sorted(road_types))}"
-    digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+def _overpass_cache_path(bbox: tuple) -> Path:
+    digest = hashlib.sha1(str(bbox).encode()).hexdigest()[:16]
     return _OVERPASS_CACHE_DIR / f"{digest}.pkl"
 
 
-def _fetch_road_types(road_types: set[str]) -> set[str]:
-    """Rideable road types plus the bigger tiers we fetch only for crossing detection."""
-    return set(road_types) | DETECTION_ROAD_TYPES
-
-
-def _build_query(bbox: tuple[float, float, float, float], road_types: set[str]) -> str:
-    """Overpass QL query: all ways matching road types + their nodes + traffic control nodes."""
+def _build_query(bbox: tuple[float, float, float, float]) -> str:
+    """Overpass QL query: the full road network + traffic control nodes in the bbox."""
     south, west, north, east = bbox
     bbox_str = f"{south},{west},{north},{east}"
 
-    highway_filter = "|".join(sorted(_fetch_road_types(road_types)))
+    highway_filter = "|".join(sorted(ROAD_NETWORK_TYPES))
 
     return f"""
 [out:json][timeout:{TIMEOUT_SECONDS}];
@@ -55,6 +57,28 @@ out skel qt;
 """.strip()
 
 
+def _contiguous_inbbox_runs(node_ids: list[int], inside: set[int]) -> list[list[int]]:
+    """Split a way's node sequence into maximal runs of consecutive in-bbox nodes.
+
+    Overpass returns whole ways that merely touch the bbox, so a way exiting the
+    bbox drags in nodes outside it — where we never fetched the cross streets, so
+    those stretches look intersection-free and let a descent run off the edge.
+    Dropping out-of-bbox nodes and keeping only contiguous in-bbox runs trims each
+    way at the boundary (the rare dip-out-and-back way splits into two runs rather
+    than collapsing into one false edge across the gap)."""
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for nid in node_ids:
+        if nid in inside:
+            current.append(nid)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
 def _parse_oneway(tags: dict) -> tuple[bool, bool]:
     """Return (oneway_forward, oneway_reverse)."""
     val = tags.get("oneway", "no")
@@ -67,20 +91,20 @@ def _parse_oneway(tags: dict) -> tuple[bool, bool]:
 
 def fetch_osm_data(
     bbox: tuple[float, float, float, float],
-    road_types: set[str],
 ) -> tuple[dict[int, OSMNode], list[OSMWay]]:
     """
-    Query Overpass and return (nodes_by_id, ways).
+    Query Overpass for the full road network in the bbox and return (nodes_by_id, ways).
     bbox: (south, west, north, east) in decimal degrees.
-    Results are cached to disk for _CACHE_TTL seconds.
+    Results are cached to disk for _CACHE_TTL seconds. Filtering the network down to
+    what is rideable happens downstream (main.py); see ROAD_NETWORK_TYPES.
     """
     if _CACHE_TTL > 0:
-        cache_path = _overpass_cache_path(bbox, set(road_types))
+        cache_path = _overpass_cache_path(bbox)
         if cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < _CACHE_TTL:
             with cache_path.open("rb") as f:
                 return pickle.load(f)
 
-    query = _build_query(bbox, road_types)
+    query = _build_query(bbox)
 
     headers = {"Accept": "*/*", "User-Agent": "hillbomb/0.1"}
     with httpx.Client(timeout=TIMEOUT_SECONDS + 10) as client:
@@ -88,51 +112,71 @@ def fetch_osm_data(
         resp.raise_for_status()
         data = resp.json()
 
-    # First pass: collect all node coords and tags
+    # First pass: collect all node coords and tags.
+    # A traffic-control node almost always also lies on a way, so it appears
+    # twice in `elements`: once tagged (from `out body`) and once untagged (from
+    # the `>; out skel qt;` recurse-down). The untagged copy must never clear a
+    # flag the tagged copy set — OR the flags in rather than overwriting, so the
+    # element order in the response can't silently drop every signal/stop sign.
     nodes_by_id: dict[int, OSMNode] = {}
     for el in data["elements"]:
         if el["type"] == "node":
             tags = el.get("tags", {})
-            nodes_by_id[el["id"]] = OSMNode(
-                id=el["id"],
-                lat=el["lat"],
-                lon=el["lon"],
-                is_traffic_signal=tags.get("highway") == "traffic_signals",
-                is_stop_sign=tags.get("highway") == "stop",
-            )
+            is_signal = tags.get("highway") == "traffic_signals"
+            is_stop = tags.get("highway") == "stop"
+            existing = nodes_by_id.get(el["id"])
+            if existing is None:
+                nodes_by_id[el["id"]] = OSMNode(
+                    id=el["id"],
+                    lat=el["lat"],
+                    lon=el["lon"],
+                    is_traffic_signal=is_signal,
+                    is_stop_sign=is_stop,
+                )
+            else:
+                existing.is_traffic_signal = existing.is_traffic_signal or is_signal
+                existing.is_stop_sign = existing.is_stop_sign or is_stop
 
-    # Second pass: parse ways. Keep the whole fetched set (rideable + detection
-    # tiers); traversability is decided downstream so detection roads survive into
-    # the graph for the avoid-bigger/equal-roads toggles.
-    fetch_types = _fetch_road_types(road_types)
+    # Nodes inside the queried bbox. Ways are trimmed to these so descents can't
+    # run off the edge along a road whose cross streets we never fetched.
+    south, west, north, east = bbox
+    inside = {
+        nid for nid, n in nodes_by_id.items()
+        if south <= n.lat <= north and west <= n.lon <= east
+    }
+
+    # Second pass: parse ways. Keep the whole road network; traversability is
+    # decided downstream so bigger roads survive into the graph for the
+    # avoid-bigger/equal-roads toggles.
     ways: list[OSMWay] = []
     for el in data["elements"]:
         if el["type"] != "way":
             continue
         tags = el.get("tags", {})
         highway = tags.get("highway", "")
-        if highway not in fetch_types:
-            continue
-
-        node_ids = el.get("nodes", [])
-        # Drop ways whose nodes weren't returned (outside bbox edge cases)
-        node_ids = [n for n in node_ids if n in nodes_by_id]
-        if len(node_ids) < 2:
+        if highway not in ROAD_NETWORK_TYPES:
             continue
 
         oneway, oneway_rev = _parse_oneway(tags)
 
-        ways.append(OSMWay(
-            id=el["id"],
-            node_ids=node_ids,
-            highway=highway,
-            oneway=oneway,
-            oneway_reverse=oneway_rev,
-            is_bridge=tags.get("bridge", "no") not in ("no", ""),
-            is_tunnel=tags.get("tunnel", "no") not in ("no", ""),
-            surface=tags.get("surface", ""),
-            name=tags.get("name", ""),
-        ))
+        # A way that crosses the bbox boundary becomes one OSMWay per in-bbox run.
+        for run in _contiguous_inbbox_runs(el.get("nodes", []), inside):
+            if len(run) < 2:
+                continue
+            ways.append(OSMWay(
+                id=el["id"],
+                node_ids=run,
+                highway=highway,
+                oneway=oneway,
+                oneway_reverse=oneway_rev,
+                is_bridge=tags.get("bridge", "no") not in ("no", ""),
+                is_tunnel=tags.get("tunnel", "no") not in ("no", ""),
+                surface=tags.get("surface", ""),
+                name=tags.get("name", ""),
+            ))
+
+    # Drop out-of-bbox nodes so they never reach the graph or the elevation cache.
+    nodes_by_id = {nid: n for nid, n in nodes_by_id.items() if nid in inside}
 
     if _CACHE_TTL > 0:
         _OVERPASS_CACHE_DIR.mkdir(parents=True, exist_ok=True)

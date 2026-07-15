@@ -20,12 +20,12 @@ const TOGGLE_CONFIGS: ToggleConfig[] = [
   },
   {
     key: 'avoid_bigger_roads',
-    label: 'Avoid bigger roads',
+    label: 'Avoid crossing bigger roads',
     tooltip: 'Stop routes that cross onto a higher road class (e.g. residential → primary).',
   },
   {
     key: 'avoid_equal_roads',
-    label: 'Avoid equal roads',
+    label: 'Avoid crossing equal roads',
     tooltip: 'Stop routes when they transition to an equal-class but different road.',
   },
   {
@@ -37,6 +37,11 @@ const TOGGLE_CONFIGS: ToggleConfig[] = [
     key: 'exclude_bridges',
     label: 'Exclude bridges',
     tooltip: 'Skip ways tagged as bridges entirely.',
+  },
+  {
+    key: 'stay_on_initial_road',
+    label: "Don't leave initial road",
+    tooltip: 'Keep routes on the road they start on. Connected ways sharing the same name are allowed; turning onto a differently-named road ends the route. Roads with no name in OSM only continue onto other unnamed ways.',
   },
   {
     key: 'animate_candidates',
@@ -55,9 +60,9 @@ const ROAD_SIZE_STEPS: [string, number][] = [
   ['+ Primary', 7],
   ['All roads', 9],
 ]
-const DEFAULT_ROAD_SIZE_STEP = 3  // "+ Tertiary" — matches DEFAULT_ROAD_TYPES
+const DEFAULT_ROAD_SIZE_STEP = 5  // "+ Primary" (rank 7)
 
-export const ALL_SURFACE_CATEGORIES = ['paved', 'gravel', 'unpaved', 'cobblestone'] as const
+export const ALL_SURFACE_CATEGORIES = ['paved', 'gravel', 'unpaved', 'cobblestone', 'unknown'] as const
 export type SurfaceCategory = typeof ALL_SURFACE_CATEGORIES[number]
 
 const SURFACE_LABELS: Record<SurfaceCategory, string> = {
@@ -65,6 +70,24 @@ const SURFACE_LABELS: Record<SurfaceCategory, string> = {
   gravel: 'Gravel / compacted',
   unpaved: 'Unpaved / dirt',
   cobblestone: 'Cobblestone / sett',
+  unknown: 'Unknown / untagged',
+}
+
+const SURFACE_TITLES: Record<SurfaceCategory, string> = {
+  paved: 'Include ways with a paved surface',
+  gravel: 'Include ways with a gravel surface',
+  unpaved: 'Include ways with an unpaved surface',
+  cobblestone: 'Include ways with a cobblestone surface',
+  unknown: 'Include ways with no surface tag in OSM (or an unrecognized one). Most roads are untagged — unchecking this is aggressive.',
+}
+
+export const MIN_DISTANCE_MAX_M = 3000
+export const MIN_DISTANCE_STEP_M = 50
+
+function formatDistance(m: number): string {
+  if (m === 0) return 'No minimum'
+  if (m < 1000) return `${m} m`
+  return `${(m / 1000).toFixed(1)} km`
 }
 
 interface SearchControlsProps {
@@ -75,8 +98,11 @@ interface SearchControlsProps {
   onRoadSizeChange: (step: number) => void
   allowedSurfaces: SurfaceCategory[]
   onAllowedSurfacesChange: (surfaces: SurfaceCategory[]) => void
+  minDistanceM: number
+  onMinDistanceChange: (m: number) => void
   onSearch: () => void
   onStop: () => void
+  activeRouteId?: string | null
 }
 
 export function SearchControls({
@@ -87,14 +113,21 @@ export function SearchControls({
   onRoadSizeChange,
   allowedSurfaces,
   onAllowedSurfacesChange,
+  minDistanceM,
+  onMinDistanceChange,
   onSearch,
   onStop,
+  activeRouteId,
 }: SearchControlsProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   useEffect(() => {
     if (isSearching) setAdvancedOpen(false)
   }, [isSearching])
+
+  useEffect(() => {
+    if (activeRouteId) setAdvancedOpen(false)
+  }, [activeRouteId])
 
   const handleToggle = (key: keyof Toggles) => {
     onTogglesChange({ ...toggles, [key]: !toggles[key] })
@@ -157,7 +190,7 @@ export function SearchControls({
       </button>
 
       {advancedOpen && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '0 16px 14px' }}>
+        <div style={{ maxHeight: '195px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '0 16px 14px' }}>
 
           {/* Road size slider */}
           <div>
@@ -183,6 +216,29 @@ export function SearchControls({
             </div>
           </div>
 
+          {/* Min distance slider */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#374151' }}>Min distance</span>
+              <span style={{ fontSize: '12px', color: minDistanceM > 0 ? '#3b82f6' : '#6b7280' }}>{formatDistance(minDistanceM)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={MIN_DISTANCE_MAX_M}
+              step={MIN_DISTANCE_STEP_M}
+              value={minDistanceM}
+              onChange={e => onMinDistanceChange(Number(e.target.value))}
+              style={{ width: '100%', cursor: 'pointer' }}
+              aria-label="Minimum route distance"
+              title="Hide routes shorter than this distance"
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>
+              <span>Any</span>
+              <span>3 km</span>
+            </div>
+          </div>
+
           {/* Terrain + behaviour checkboxes unified */}
           <div>
             <div style={{ fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
@@ -192,7 +248,7 @@ export function SearchControls({
               {ALL_SURFACE_CATEGORIES.map(cat => (
                 <label
                   key={cat}
-                  title={`Include ways with ${cat} surface`}
+                  title={SURFACE_TITLES[cat]}
                   style={{
                     display: 'flex',
                     alignItems: 'center',

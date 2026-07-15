@@ -15,6 +15,7 @@ const DEFAULT_TOGGLES: Toggles = {
   avoid_equal_roads: true,
   exclude_tunnels: false,
   exclude_bridges: false,
+  stay_on_initial_road: false,
   animate_candidates: false,
 }
 
@@ -30,6 +31,8 @@ function renderControls(overrides: Partial<React.ComponentProps<typeof SearchCon
       onRoadSizeChange={vi.fn()}
       allowedSurfaces={DEFAULT_SURFACES}
       onAllowedSurfacesChange={vi.fn()}
+      minDistanceM={0}
+      onMinDistanceChange={vi.fn()}
       onSearch={vi.fn()}
       onStop={vi.fn()}
       {...overrides}
@@ -62,11 +65,11 @@ describe('SearchControls', () => {
     expect(onStop).toHaveBeenCalledOnce()
   })
 
-  it('renders checkboxes for all 7 toggles and 4 terrain types when advanced settings is open', () => {
+  it('renders a checkbox for every toggle and terrain type when advanced settings is open', () => {
     renderControls()
     openAdvanced()
-    // 7 behaviour toggles + 4 surface categories = 11
-    expect(screen.getAllByRole('checkbox')).toHaveLength(11)
+    const expected = Object.keys(DEFAULT_TOGGLES).length + ALL_SURFACE_CATEGORIES.length
+    expect(screen.getAllByRole('checkbox')).toHaveLength(expected)
   })
 
   it('hides checkboxes when advanced settings is collapsed', () => {
@@ -84,8 +87,10 @@ describe('SearchControls', () => {
     const onRoadSizeChange = vi.fn()
     renderControls({ onRoadSizeChange })
     openAdvanced()
-    fireEvent.change(screen.getByRole('slider', { name: /max road size/i }), { target: { value: '5' } })
-    expect(onRoadSizeChange).toHaveBeenCalledWith(5)
+    // Must differ from DEFAULT_ROAD_SIZE_STEP — React fires no change event for an unchanged value.
+    const moved = DEFAULT_ROAD_SIZE_STEP - 1
+    fireEvent.change(screen.getByRole('slider', { name: /max road size/i }), { target: { value: String(moved) } })
+    expect(onRoadSizeChange).toHaveBeenCalledWith(moved)
   })
 
   it('shows avoid_stoplights as checked when advanced settings is open', () => {

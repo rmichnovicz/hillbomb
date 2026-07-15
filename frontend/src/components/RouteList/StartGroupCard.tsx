@@ -1,6 +1,49 @@
+import { useState } from 'react'
 import { flowGradeColor } from '../../utils/gradeColor'
 import { downloadGPX } from '../../utils/gpx'
 import type { Route, StartGroup } from '../../types'
+
+/** Tray-and-arrow download icon. Inherits color via `currentColor`. */
+function DownloadIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  )
+}
+
+function DownloadButton({ route }: { route: Route }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); downloadGPX(route) }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="Download GPX"
+      aria-label="Download GPX"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '24px',
+        height: '24px',
+        borderRadius: '6px',
+        border: 'none',
+        background: hover ? '#eff6ff' : 'transparent',
+        cursor: 'pointer',
+        color: hover ? '#2563eb' : '#9ca3af',
+        flexShrink: 0,
+        padding: 0,
+        transition: 'background 120ms, color 120ms',
+      }}
+    >
+      <DownloadIcon />
+    </button>
+  )
+}
 
 const SURFACE_COLORS: Record<string, string> = {
   paved:       '#6b7280',
@@ -59,6 +102,26 @@ interface StartGroupCardProps {
 
 function formatLength(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`
+}
+
+/** Compact flow-grade indicator: a small colored dot plus the letter in muted
+ *  text. Intentionally low-key — the grade is secondary to speed/length. */
+function FlowGrade({ grade }: { grade: string }) {
+  return (
+    <span
+      title={`Flow grade ${grade}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', flexShrink: 0 }}
+    >
+      <span style={{
+        width: '7px',
+        height: '7px',
+        borderRadius: '50%',
+        background: flowGradeColor(grade),
+        display: 'inline-block',
+      }} />
+      <span style={{ fontSize: '11px', fontWeight: 600, color: '#9ca3af' }}>{grade}</span>
+    </span>
+  )
 }
 
 function RouteRow({
@@ -125,39 +188,8 @@ function RouteRow({
             animation: 'shimmer 1.2s infinite',
           }} />
         )}
-        <span style={{
-          display: 'inline-block',
-          padding: '1px 6px',
-          borderRadius: '4px',
-          fontSize: '11px',
-          fontWeight: 700,
-          color: '#fff',
-          background: flowGradeColor(flow_grade),
-        }}>
-          {flow_grade}
-        </span>
-        <button
-          onClick={e => { e.stopPropagation(); downloadGPX(route) }}
-          title="Download GPX"
-          aria-label="Download GPX"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '22px',
-            height: '22px',
-            borderRadius: '4px',
-            border: '1px solid #d1d5db',
-            background: '#fff',
-            cursor: 'pointer',
-            color: '#6b7280',
-            fontSize: '12px',
-            flexShrink: 0,
-            padding: 0,
-          }}
-        >
-          ↓
-        </button>
+        <FlowGrade grade={flow_grade} />
+        <DownloadButton route={route} />
       </div>
     </div>
   )
@@ -188,56 +220,55 @@ export function StartGroupCard({
         border: isActive ? '2px solid #3b82f6' : '1px solid #e5e7eb',
         borderRadius: '8px',
         background: isActive ? '#eff6ff' : '#fff',
-        marginBottom: '8px',
+        marginBottom: '6px',
         overflow: 'hidden',
       }}
     >
       {/* Group header — click to expand/collapse */}
       <div
         onClick={() => onSelectGroup(group.startNodeId)}
-        style={{ padding: '12px', cursor: 'pointer' }}
+        style={{ padding: '8px 10px', cursor: 'pointer' }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: '14px' }}>{metadata.name}</div>
-            <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{
+              fontWeight: 600,
+              fontSize: '13px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              {metadata.name}
+            </div>
+            <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '1px' }}>
               {group.routes.length} {group.routes.length === 1 ? 'route' : 'routes'}
+              {' · '}{Math.round(metadata.total_descent_m)} m ↓
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              borderRadius: '4px',
-              fontSize: '13px',
-              fontWeight: 700,
-              color: '#fff',
-              background: flowGradeColor(flow_grade),
-            }}>
-              {flow_grade}
-            </span>
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>{isActive ? '▲' : '▼'}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {hasPhysics ? (
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#111827' }}>
+                {Math.round(top_speed_kmh!)} km/h
+              </span>
+            ) : (
+              <span
+                className="shimmer"
+                style={{
+                  display: 'inline-block',
+                  width: '56px',
+                  height: '15px',
+                  borderRadius: '4px',
+                  background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+                  backgroundSize: '200% 100%',
+                  animation: 'shimmer 1.2s infinite',
+                }}
+              />
+            )}
+            <FlowGrade grade={flow_grade} />
+            <span style={{ fontSize: '10px', color: '#9ca3af' }}>{isActive ? '▲' : '▼'}</span>
           </div>
         </div>
 
-        <div style={{ marginTop: '8px', fontSize: '13px' }}>
-          {hasPhysics ? (
-            <span>Top: <strong>{Math.round(top_speed_kmh!)} km/h</strong></span>
-          ) : (
-            <span
-              className="shimmer"
-              style={{
-                display: 'inline-block',
-                width: '80px',
-                height: '16px',
-                borderRadius: '4px',
-                background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
-                backgroundSize: '200% 100%',
-                animation: 'shimmer 1.2s infinite',
-              }}
-            />
-          )}
-        </div>
         <SurfaceBar surfacePcts={best.surface_pcts ?? {}} />
       </div>
 

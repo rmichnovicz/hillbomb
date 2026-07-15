@@ -83,7 +83,9 @@ def _parse_sse(body: bytes) -> list[dict]:
 def client():
     """TestClient with ElevationService mocked out (suppresses startup HTTP call)."""
     mock_svc = MagicMock(spec=ElevationService)
-    mock_svc.get_elevations.side_effect = lambda coords, should_cancel=None: [110.0] * len(coords)
+    mock_svc.get_elevations.side_effect = (
+        lambda coords, should_cancel=None, cache_coords=None: [110.0] * len(coords)
+    )
     mock_svc.resolution_m = 10.0
     with patch("backend.main.ElevationService", return_value=mock_svc):
         with TestClient(app, raise_server_exceptions=False) as c:

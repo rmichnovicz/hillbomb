@@ -13,6 +13,7 @@ const makeRoute = (id: string, topSpeed = 40): Route => ({
   flow_score: 85,
   flow_grade: 'A',
   surface_pcts: { paved: 100 },
+  stops: [],
   speed_profile: [0, topSpeed],
   top_speed_kmh: topSpeed,
   avg_speed_kmh: topSpeed / 2,

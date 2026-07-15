@@ -43,6 +43,12 @@ def _check_cancel(should_cancel: Callable[[], bool] | None) -> None:
     if should_cancel is not None and should_cancel():
         raise SearchCancelled()
 
+
+def _coord_key(coord: tuple[float, float]) -> tuple[float, float]:
+    """Round a (lon, lat) pair to ~0.1 m so it can key the elevation cache map.
+    Matches the 6-decimal precision used for the cache file's hash key."""
+    return (round(coord[0], 6), round(coord[1], 6))
+
 # ── GDAL/rasterio tuning for remote COG reads ──────────────────────────────────
 # Set process-wide before any GDAL operation. These turn a windowed read over
 # /vsicurl into a handful of HTTP range requests instead of a full-file scan:
@@ -534,17 +540,49 @@ class ElevationService:
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def missing_coords(
+        self,
+        coords: list[tuple[float, float]],
+        cache_coords: list[tuple[float, float]] | None = None,
+    ) -> list[tuple[float, float]]:
+        """Cheap cache probe: return the subset of `coords` not yet on disk.
+
+        Reads only the cache file (no network/tile work), so the pipeline can
+        decide whether a search needs to enter the elevation gate at all — a
+        fully-cached (warm) search returns [] and skips the queue entirely.
+
+        Uses the same cache-file key as get_elevations (keyed on cache_coords —
+        the full network geometry — not the queried subset), so the probe sees
+        exactly what get_elevations would find cached.
+        """
+        if not coords:
+            return []
+        key_coords = cache_coords if cache_coords is not None else coords
+        key = ",".join(f"{lon:.6f},{lat:.6f}" for lon, lat in sorted(key_coords))
+        cache_path = self._elev_cache_dir / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.pkl"
+        cache_map, _ = self._read_elev_cache(cache_path)
+        return [c for c in coords if _coord_key(c) not in cache_map]
+
     def get_elevations(
         self,
         coords: list[tuple[float, float]],
         should_cancel: Callable[[], bool] | None = None,
+        cache_coords: list[tuple[float, float]] | None = None,
     ) -> list[float]:
         """
         Returns elevations (meters ASL) for a list of (lon, lat) pairs.
         Selects the best available source and falls back through the cascade.
         Sets self.resolution_m to reflect the dominant source used.
-        Results are cached to disk; cache is keyed by the sorted coordinate set
-        so the same logical request always hits the same cache entry.
+
+        Caching: results are stored on disk as a per-coordinate map (rounded
+        coordinate → elevation) and accumulated across calls. The cache FILE is
+        keyed by cache_coords — the full, toggle-independent network geometry for
+        the viewport — not by `coords` itself. This way a later search that needs
+        only a different subset of the same network (e.g. after a surface/road
+        filter change) reuses every coordinate already fetched and only queries
+        the ones still missing. If cache_coords is None it defaults to `coords`,
+        giving the simple "one request, one entry" behaviour for callers (and
+        tests) that don't separate the needed set from the cache identity.
 
         should_cancel, if given, is polled between cascade stages and between tile
         reads inside each source; when it becomes true the query aborts by raising
@@ -554,19 +592,35 @@ class ElevationService:
         if not coords:
             return []
 
-        key = ",".join(f"{lon:.6f},{lat:.6f}" for lon, lat in sorted(coords))
+        key_coords = cache_coords if cache_coords is not None else coords
+        key = ",".join(f"{lon:.6f},{lat:.6f}" for lon, lat in sorted(key_coords))
         cache_path = self._elev_cache_dir / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.pkl"
-        if cache_path.exists():
-            try:
-                with cache_path.open("rb") as f:
-                    cached = pickle.load(f)
-                if cached.get("coords") == coords:
-                    with self._locks_lock:
-                        self.resolution_m = cached.get("resolution_m", _RES_13)
-                    return cached["elevations"]
-            except Exception as exc:
-                log.warning("Elevation cache read failed (%s): %s", cache_path.name, exc)
 
+        cache_map, cached_res = self._read_elev_cache(cache_path)
+
+        missing = [c for c in coords if _coord_key(c) not in cache_map]
+        if not missing:
+            # Every requested coordinate is already cached — no network/disk work.
+            with self._locks_lock:
+                self.resolution_m = cached_res
+            return [cache_map[_coord_key(c)] for c in coords]
+
+        fetched = self._fetch_cascade(missing, should_cancel)
+        for c, e in zip(missing, fetched):
+            cache_map[_coord_key(c)] = e
+
+        # resolution_m was set by _fetch_cascade for this batch. Persist the most
+        # recent source's resolution alongside the accumulated map.
+        self._write_elev_cache(cache_path, cache_map)
+        return [cache_map[_coord_key(c)] for c in coords]
+
+    def _fetch_cascade(
+        self,
+        coords: list[tuple[float, float]],
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> list[float]:
+        """Resolve elevations for `coords` through the source cascade (no caching).
+        Sets self.resolution_m to the dominant source used."""
         lats = [c[1] for c in coords]
         lons = [c[0] for c in coords]
         south, west = min(lats), min(lons)
@@ -580,9 +634,7 @@ class ElevationService:
             if all(v is not None for v in r1m):
                 with self._locks_lock:
                     self.resolution_m = _RES_1M
-                result = [v for v in r1m]  # type: ignore[misc]
-                self._write_elev_cache(cache_path, coords, result)
-                return result
+                return [v for v in r1m]  # type: ignore[misc]
 
         _check_cancel(should_cancel)
 
@@ -591,9 +643,7 @@ class ElevationService:
         if all(v is not None for v in r13):
             with self._locks_lock:
                 self.resolution_m = _RES_13
-            result = [v for v in r13]  # type: ignore[misc]
-            self._write_elev_cache(cache_path, coords, result)
-            return result
+            return [v for v in r13]  # type: ignore[misc]
 
         _check_cancel(should_cancel)
 
@@ -607,13 +657,28 @@ class ElevationService:
         covered_by_13 = sum(1 for v in r13 if v is not None)
         with self._locks_lock:
             self.resolution_m = _RES_13 if covered_by_13 > len(coords) // 2 else _RES_SRTM
-        self._write_elev_cache(cache_path, coords, merged)
         return merged
 
-    def _write_elev_cache(self, path: Path, coords: list[tuple[float, float]], elevations: list[float]) -> None:
+    def _read_elev_cache(self, path: Path) -> tuple[dict[tuple[float, float], float], float]:
+        """Load the per-coordinate elevation map and stored resolution for a cache
+        file. Returns ({}, _RES_13) when the file is absent or unreadable (which
+        includes the legacy list-based format — treated as a miss, then overwritten)."""
+        if not path.exists():
+            return {}, _RES_13
+        try:
+            with path.open("rb") as f:
+                cached = pickle.load(f)
+            elev_map = cached.get("elevations")
+            if isinstance(elev_map, dict):
+                return elev_map, cached.get("resolution_m", _RES_13)
+        except Exception as exc:
+            log.warning("Elevation cache read failed (%s): %s", path.name, exc)
+        return {}, _RES_13
+
+    def _write_elev_cache(self, path: Path, cache_map: dict[tuple[float, float], float]) -> None:
         try:
             self._elev_cache_dir.mkdir(parents=True, exist_ok=True)
             with path.open("wb") as f:
-                pickle.dump({"coords": coords, "elevations": elevations, "resolution_m": self.resolution_m}, f)
+                pickle.dump({"elevations": cache_map, "resolution_m": self.resolution_m}, f)
         except Exception as exc:
             log.warning("Elevation cache write failed (%s): %s", path.name, exc)

@@ -162,10 +162,20 @@ def build_graph(
     r = config.peak_search_radius_m
     min_delta = config.peak_min_elevation_delta_m
 
+    # Only nodes on a traversable edge carry real (fetched) elevation; nodes that
+    # belong solely to non-traversable ways were never queried and default to 0.0.
+    # Restrict peak/valley detection to the elevated set so those zeros neither
+    # become spurious peaks/valleys nor pollute a real node's neighbourhood.
+    elevated_ids: set[int] = set()
+    for u, v, d in G.edges(data=True):
+        if d.get("traversable", True):
+            elevated_ids.add(u)
+            elevated_ids.add(v)
+
     # Project once; reuse for both the primary and the wider ridge-top pass.
     proj = _project_nodes(
         [(nid, n.lat, n.lon, n.elevation)
-         for nid in G.nodes if (n := nodes_by_id.get(nid)) is not None]
+         for nid in G.nodes if nid in elevated_ids and (n := nodes_by_id.get(nid)) is not None]
     )
     elev_by_id = {nid: elev for nid, _x, _y, _lat, _lon, elev in proj}
 

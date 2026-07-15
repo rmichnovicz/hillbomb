@@ -203,3 +203,37 @@ def test_single_node_returns_as_is():
     result = split_route_on_zero_speed([42], [100.0], [], [0.0])
     assert len(result) == 1
     assert result[0][0] == [42]
+
+
+def test_split_trims_leading_stall():
+    """A post-stall segment with a flat/uphill run the rider can't climb from
+    rest should be trimmed to start at the crest where motion resumes, keeping
+    the single 0 km/h crest node."""
+    node_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+    elevs = [float(e) for e in [100, 90, 80, 82, 84, 86, 80, 70]]
+    dists = [100.0] * 7
+    #        rolls down, stalls at idx 3, climbs (stays 0), descends again at idx 6
+    speed = [0.0, 10.0, 20.0, 0.0, 0.0, 0.0, 5.0, 12.0]
+    result = split_route_on_zero_speed(node_ids, elevs, dists, speed)
+    assert len(result) == 2
+    # First segment unchanged (starts rolling immediately)
+    assert result[0][0] == [1, 2, 3, 4]
+    assert result[0][3] == [0.0, 10.0, 20.0, 0.0]
+    # Second segment trimmed: drop the stall + uphill, keep node 6 (the crest)
+    seg_b_nodes, seg_b_elevs, seg_b_dists, seg_b_speed = result[1]
+    assert seg_b_nodes == [6, 7, 8]
+    assert seg_b_elevs == [86.0, 80.0, 70.0]
+    assert seg_b_dists == [100.0, 100.0]
+    assert seg_b_speed == [0.0, 5.0, 12.0]
+    assert len(seg_b_dists) == len(seg_b_nodes) - 1
+
+
+def test_split_drops_fully_stalled_tail():
+    """A trailing segment where the rider never moves again is dropped entirely."""
+    node_ids = [1, 2, 3, 4, 5]
+    elevs = [float(e) for e in [100, 90, 80, 85, 90]]
+    dists = [100.0] * 4
+    speed = [0.0, 10.0, 0.0, 0.0, 0.0]  # stall at idx 2, never recovers
+    result = split_route_on_zero_speed(node_ids, elevs, dists, speed)
+    assert len(result) == 1  # only the first, rideable segment survives
+    assert result[0][0] == [1, 2, 3]
