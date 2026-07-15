@@ -363,12 +363,18 @@ export function HillbombMap({
       // when the style spec is ready and again after every base-layer (street/
       // satellite) swap — independent of whether the base tiles have loaded — so the
       // images are always present before the symbol layers draw. onLoad covers the
-      // common case promptly; onStyleImageMissing remains a backstop.
-      onLoad={e => ensureMarkerImages(e.target)}
-      onStyleData={e => ensureMarkerImages(e.target)}
-      onStyleImageMissing={e => {
-        if (MARKER_IMAGE_IDS.has(e.id)) ensureMarkerImages(e.target)
+      // common case promptly; the styleimagemissing listener remains a backstop.
+      onLoad={e => {
+        const map = e.target
+        ensureMarkerImages(map)
+        // react-map-gl exposes no onStyleImageMissing prop, so the backstop is
+        // attached straight to the MapLibre instance. onLoad fires once per map,
+        // so this registers exactly one listener.
+        map.on('styleimagemissing', ev => {
+          if (MARKER_IMAGE_IDS.has(ev.id)) ensureMarkerImages(map)
+        })
       }}
+      onStyleData={e => ensureMarkerImages(e.target)}
       interactiveLayerIds={['start-markers-symbol', 'inactive-route-lines', 'active-group-lines', 'hovered-glow-line']}
       onClick={e => {
         if (!mapRef.current) return

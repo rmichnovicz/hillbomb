@@ -1,6 +1,8 @@
-# Hillbomb — CLAUDE.md
+# Hillbomb — architecture and conventions
 
 This file describes the project architecture, conventions, and key decisions for AI-assisted development. Read this before making changes.
+
+`AGENTS.md` is a symlink to this file, so both names resolve to one source of truth. Edit `CLAUDE.md`.
 
 ---
 
@@ -42,7 +44,8 @@ hillbomb/
 │   ├── pathfinding.cpp
 │   ├── CMakeLists.txt
 │   └── bindings.cpp       # pybind11 bindings, must expose same interface as pathfinding.py
-└── CLAUDE.md
+├── CLAUDE.md
+└── AGENTS.md              # symlink → CLAUDE.md
 ```
 
 ---
