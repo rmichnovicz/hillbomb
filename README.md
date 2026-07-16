@@ -8,6 +8,9 @@ lines that actually go down. Routes stream into the sidebar as they're found, ea
 speed profile and a flow score that grades how much a run gets interrupted by lights, crossings, and
 rough pavement.
 
+Or skip the hunting: the **Collections** tab has curated famous descents organized by city — Hawk
+Hill and friends — precomputed and ready to look at.
+
 ## How it works
 
 A search runs as a pipeline, streamed back to the browser over Server-Sent Events so routes appear as
@@ -31,6 +34,19 @@ The whole road network gets fetched, but only roads you'd actually ride are trav
 stay in the graph as non-traversable edges purely so a descent can *detect* — and stop at — the moment
 it would cross one.
 
+## Collections
+
+Curated famous descents, grouped by city. Roads don't move, so rather than re-derive Conzelman Road
+on every view, the same pipeline runs once offline and the result is committed:
+
+```bash
+python -m backend.scripts.build_collections                            # all spots
+python -m backend.scripts.build_collections --spot hawk-hill-conzelman # just one
+```
+
+Spots are defined as data in `backend/spots.py` — adding one is a list entry. See
+[docs/collections.md](docs/collections.md).
+
 ## Running it
 
 Backend (Python 3.11+):
@@ -50,8 +66,8 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints. It proxies `/search` to the backend on port 8000, so both need to be
-running.
+Open the URL Vite prints. It proxies `/search` and `/collections` to the backend on port 8000, so both
+need to be running.
 
 Elevation data is fetched from public USGS S3 buckets anonymously — no AWS account or API keys
 needed. The first search in a new area is slow while elevation is fetched; results are cached to disk

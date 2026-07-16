@@ -53,8 +53,8 @@ hillbomb/
 │   ├── CMakeLists.txt
 │   └── bindings.cpp       # pybind11 bindings, must expose same interface as pathfinding.py
 ├── docs/
-│   └── collections.md     # Collections feature doc — read before touching Collections
-├── .research/             # Raw research backlog (famous descents not yet promoted to spots.py)
+│   ├── collections.md     # Collections feature doc — read before touching Collections
+│   └── research/          # Raw research backlog (famous descents; 10 not yet promoted to spots.py)
 ├── CLAUDE.md
 └── AGENTS.md              # symlink → CLAUDE.md
 ```

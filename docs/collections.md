@@ -82,6 +82,21 @@ Behavior that matters:
 - Per-spot failures are reported and the script continues, exiting non-zero at the end if
   anything failed.
 
+### Known limitation: short street bombs come back truncated
+
+Spots build with the same default toggles as a normal search — `avoid_stop_signs` and
+`avoid_bigger_roads` on. On a mountain climb that's fine. On a **stop-sign-dense urban
+street bomb** it isn't: the descent terminates at the first cross street, so Marin Avenue
+(a ~1 km wall) builds as ~180 m, and Dolores builds as the top block only. The routes are
+real and on the right road, just cut short of the full famous run.
+
+This is a per-spot toggle question, not a pipeline bug — a hill-bomb skater blows the stop
+signs that the pathfinder treats as hard stops. The clean fix is a per-`Spot` toggle
+override (e.g. `avoid_stop_signs=False` for skate spots) so the curated line matches how
+the descent is actually ridden. `Spot.toggles` already exists; it just isn't varied per
+discipline yet. Left as a deliberate follow-up rather than hard-coded, since it changes
+what counts as "the descent."
+
 ---
 
 ## Adding a spot
@@ -97,6 +112,6 @@ Behavior that matters:
 
 ## Research
 
-`.research/famous-descents.md` holds the raw research (bbox, OSM names, grades, history)
+`docs/research/famous-descents.md` holds the raw research (bbox, OSM names, grades, history)
 for roads not yet promoted into `spots.py`. It is the backlog. Entries carry a confidence
 rating; treat anything below `high` as unverified until a build finds routes on it.
