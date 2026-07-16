@@ -191,11 +191,16 @@ export default function App() {
     if (isMobile && activeGroupId) setMobilePanelOpen(true)
   }, [isMobile, activeGroupId])
 
+  // Destructured because the hook returns a fresh object each render — depending on
+  // `collections` itself would re-run these effects/callbacks on every render. These
+  // two are stable useCallbacks.
+  const { loadIndex: loadCollectionsIndex, clearSpot: clearCollectionSpot } = collections
+
   // Fetch the collections index the first time the tab is opened — not on mount, so
   // a user who never opens it never pays for it. loadIndex() dedups internally.
   useEffect(() => {
-    if (tab === 'collections') collections.loadIndex()
-  }, [tab, collections])
+    if (tab === 'collections') loadCollectionsIndex()
+  }, [tab, loadCollectionsIndex])
 
   // Opening a spot: select its best line, which makes the map's fit-bounds effect
   // fly to it. Routes are already in `displayedRoutes` by the time this runs.
@@ -218,9 +223,9 @@ export default function App() {
   }, [clearSelection])
 
   const handleBackToCollections = useCallback(() => {
-    collections.clearSpot()
+    clearCollectionSpot()
     clearSelection()
-  }, [collections, clearSelection])
+  }, [clearCollectionSpot, clearSelection])
 
   const handleSearch = useCallback(() => {
     const [, maxRoadRank] = ROAD_SIZE_STEPS[roadSizeStep]
