@@ -21,29 +21,40 @@ hillbomb/
 │   │   ├── components/
 │   │   │   ├── Map/           # MapLibre GL map, route overlays, map pin scrubbing
 │   │   │   ├── RouteList/     # Sidebar route cards, sparklines, flow score badges
+│   │   │   ├── Collections/   # Curated famous descents tab (browse by city → spot routes)
 │   │   │   ├── ProfilePanel/  # Elevation + speed profile chart, scrub interaction
 │   │   │   ├── RiderSettings/ # Physics parameter sliders
 │   │   │   └── SearchControls/ # "Search this area" button, toggle controls, physics params, advanced settings
 │   │   ├── hooks/
 │   │   │   ├── useSearch.ts       # SSE connection, streaming route ingestion
+│   │   │   ├── useCollections.ts  # Curated collections index + per-spot fetch
 │   │   │   ├── usePhysics.ts      # Client-side physics sim (NumPy equiv in JS)
 │   │   │   └── useLocalStorage.ts # Saved routes persistence
 │   │   ├── types/             # Shared TypeScript types (Route, Node, Edge, RiderParams)
 │   │   └── utils/
 │   │       └── gradeColor.ts  # Grade → color mapping (shared by chart and sparklines)
 ├── backend/
-│   ├── main.py            # FastAPI app, SSE endpoint
+│   ├── main.py            # FastAPI app, SSE endpoint, /collections endpoints
+│   ├── pipeline.py        # Shared pipeline core — used by BOTH main.py and the collections builder
 │   ├── overpass.py        # Overpass API queries, way parsing
 │   ├── elevation.py       # Open-Topo-Data queries, per-node elevation enrichment
 │   ├── graph.py           # Sparse graph construction, peak/valley detection
 │   ├── pathfinding.py     # Greedy descent algorithm, priority queue, route scoring
 │   ├── physics.py         # NumPy speed profile simulation
 │   ├── scoring.py         # Flow score computation
-│   └── config.py          # All tunable parameters (see Parameters section)
+│   ├── spots.py           # Curated famous descents (the Collections source data)
+│   ├── config.py          # All tunable parameters (see Parameters section)
+│   ├── scripts/
+│   │   └── build_collections.py  # Offline builder: Spot → routes → collections.json
+│   └── data/
+│       └── collections.json      # Build output; COMMITTED
 ├── cpp/                   # C++ pathfinding extension (post-MVP)
 │   ├── pathfinding.cpp
 │   ├── CMakeLists.txt
 │   └── bindings.cpp       # pybind11 bindings, must expose same interface as pathfinding.py
+├── docs/
+│   └── collections.md     # Collections feature doc — read before touching Collections
+├── .research/             # Raw research backlog (famous descents not yet promoted to spots.py)
 ├── CLAUDE.md
 └── AGENTS.md              # symlink → CLAUDE.md
 ```
@@ -82,6 +93,42 @@ A **stop button** is shown while a search is in progress. It closes the SSE conn
 4. **Pathfinding** (`pathfinding.py`): greedy descent from priority queue. Emit routes via an async generator so FastAPI can stream them as SSE events.
 5. **Physics simulation** (`physics.py`): for each finalized route, run the NumPy speed profile simulation and attach results before emitting.
 6. **Flow scoring** (`scoring.py`): compute flow score for each finalized route before emitting.
+
+### Shared pipeline core (`pipeline.py`)
+
+`main.py` handles HTTP: SSE framing, the admission gate, cancellation, disconnect
+watching. Everything *reusable* about the pipeline lives in `pipeline.py`:
+
+- `mark_traversable()` — the fetch-whole-network / filter-for-riding rule
+- `surface_category()` / `surface_pcts()`
+- `RouteFinalizer` — physics sim, zero-speed splitting, Jaccard dedup, flow scoring
+- `route_payload()` — **the single definition of a route's wire shape**
+
+This exists so the offline collections builder cannot drift from the live search: both
+call the same code, so a curated route and a searched route are byte-identical in shape.
+**If you change a route's wire shape, change `route_payload()`** — it lands in `/search`
+SSE and `collections.json` together, and `frontend/src/types/index.ts` `Route` must match.
+
+### Collections (curated famous descents)
+
+A hand-curated set of famous descents (Hawk Hill, etc.) grouped by city, precomputed
+offline and served as static JSON — so a new user has world-class routes to look at
+without panning around hunting for a hill. Roads don't move, so we run the real pipeline
+once, offline, and commit the output rather than paying ~15 s of Overpass + elevation per
+view.
+
+```
+GET /collections         → index: spots by city, metadata + headline stats, NO geometry
+GET /collections/{slug}  → one spot with its full routes
+```
+
+Split in two because one spot's routes are ~65 KB of geometry/elevation/speed samples;
+the index stays small enough to load on tab open, and the heavy part loads per spot.
+
+**Read `docs/collections.md` before touching this.** Short version: spots are data in
+`backend/spots.py`; `python -m backend.scripts.build_collections` builds them; the
+output is committed. The field that decides whether a spot works is `osm_way_names` —
+it must be the exact OSM `name` tag ("Conzelman Road"), not the popular name ("Hawk Hill").
 
 ### Pathfinding algorithm details
 

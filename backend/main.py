@@ -27,6 +27,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 logging.basicConfig(level=logging.INFO)
@@ -37,22 +38,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from .config import DEFAULT_ROAD_TYPES, HIGHWAY_RANK, RIDER_PROFILES, SURFACE_CATEGORIES, SearchConfig, Toggles
+from .config import DEFAULT_ROAD_TYPES, RIDER_PROFILES, SearchConfig, Toggles
 from .elevation import ElevationService, SearchCancelled
 from .gate import RequestGate
 from .graph import build_graph
 from .overpass import fetch_osm_data
-from .pathfinding import build_route_from_data, find_routes
-from .physics import simulate_speed_profile, split_route_on_zero_speed
-from .scoring import compute_flow_score
-
-_DEDUP_THRESHOLD = 0.85
-
-
-def _jaccard(a: frozenset[int], b: frozenset[int]) -> float:
-    if not a and not b:
-        return 1.0
-    return len(a & b) / len(a | b)
+from .pathfinding import find_routes
+from .pipeline import RouteFinalizer, mark_traversable, route_payload, traversable_node_ids
 
 
 @asynccontextmanager
@@ -119,54 +111,10 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _surface_category(tag: str) -> str:
-    """Map a raw OSM surface tag to a display/filter category.
-
-    An empty tag (untagged way) or any value matching no known category maps to
-    "unknown" — so the "unknown" surface category covers both cases uniformly.
-    """
-    for cat_name, tags in SURFACE_CATEGORIES.items():
-        if tag in tags:
-            return cat_name
-    return "unknown"
-
-
-def _surface_pcts(route) -> dict[str, float]:
-    """Categorize raw OSM surface tags into display categories and return percentages."""
-    total = route.length_m or 1.0
-    cat_dist: dict[str, float] = {}
-    for tag, dist in route.surface_distances.items():
-        matched = _surface_category(tag)
-        cat_dist[matched] = cat_dist.get(matched, 0.0) + dist
-    return {cat: round(d / total * 100, 1) for cat, d in sorted(cat_dist.items(), key=lambda x: -x[1])}
-
-
 def _route_event(route) -> str:
-    return _sse({
-        "type": "route",
-        "route_id": route.route_id,
-        "start_node_id": route.start_node_id,
-        "geometry": {
-            "type": "LineString",
-            "coordinates": route.coordinates,
-        },
-        "metadata": {
-            "name": route.name,
-            "length_m": round(route.length_m, 1),
-            "total_descent_m": round(route.total_descent_m, 1),
-            "avg_grade_pct": round(route.avg_grade_pct, 2),
-            "primary_highway": route.primary_highway,
-        },
-        "elevations": [round(e, 1) for e in route.elevations],
-        "segment_distances": [round(d, 1) for d in route.segment_distances],
-        "flow_score": round(route.flow_score, 1),
-        "flow_grade": route.flow_grade,
-        "surface_pcts": _surface_pcts(route),
-        "stops": route.stops,
-        "speed_profile": [round(v, 1) for v in route.speed_profile],
-        "top_speed_kmh": round(route.top_speed_kmh, 1),
-        "avg_speed_kmh": round(route.avg_speed_kmh, 1),
-    })
+    # Shape lives in pipeline.route_payload so the collections builder emits the
+    # identical thing; this only adds the SSE discriminator.
+    return _sse({"type": "route", **route_payload(route)})
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -226,25 +174,16 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
         # Decide traversability per way. Bigger roads (and surface/rank-excluded
         # ways) stay in the graph so the avoid-bigger/equal-roads toggles can stop
         # a descent at them, but are tagged non-traversable so they're never ridden.
-        allowed_cats: set[str] | None = (
-            set(req.allowed_surface_categories)
-            if req.allowed_surface_categories is not None
-            else None
+        mark_traversable(
+            ways,
+            road_types=road_types,
+            max_road_rank=req.max_road_rank,
+            allowed_surface_categories=(
+                set(req.allowed_surface_categories)
+                if req.allowed_surface_categories is not None
+                else None
+            ),
         )
-
-        def _is_rideable(w) -> bool:
-            if w.highway not in road_types:
-                return False
-            if HIGHWAY_RANK.get(w.highway, 3) > req.max_road_rank:
-                return False
-            # Surface gate. Untagged ways (and any unrecognized tag) fall into the
-            # "unknown" category, so excluding it drops surface-unknown roads too.
-            if allowed_cats is not None and _surface_category(w.surface) not in allowed_cats:
-                return False
-            return True
-
-        for w in ways:
-            w.traversable = _is_rideable(w)
 
         used_ids = {nid for w in ways for nid in w.node_ids}
         active_nodes = {nid: n for nid, n in nodes.items() if nid in used_ids}
@@ -257,7 +196,7 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
         # The cache file is still keyed on the FULL network geometry (used_ids,
         # which is toggle-independent), so re-searching the same area with
         # different surface/road filters reuses every coordinate already fetched.
-        traversable_ids = {nid for w in ways if w.traversable for nid in w.node_ids}
+        traversable_ids = traversable_node_ids(ways)
         needed_nodes = {nid: n for nid, n in active_nodes.items() if nid in traversable_ids}
 
         coords = [(n.lon, n.lat) for n in needed_nodes.values()]
@@ -317,7 +256,7 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
 
         yield _sse({"type": "status", "message": "Searching for hill bombs..."})
         t0 = time.perf_counter()
-        emitted_node_sets: list[frozenset[int]] = []
+        finalizer = RouteFinalizer(G, nodes, config, params)
 
         # find_routes is a CPU-bound generator. Run it on an executor thread and
         # feed finalized routes through a queue so the event loop stays free to run
@@ -347,45 +286,7 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
             if await is_done():
                 return
 
-            speed_profile, top_speed, avg_speed = simulate_speed_profile(
-                raw_route.elevations, raw_route.segment_distances, params, config
-            )
-
-            segments = split_route_on_zero_speed(
-                raw_route.node_ids,
-                raw_route.elevations,
-                raw_route.segment_distances,
-                speed_profile,
-            )
-
-            was_split = len(segments) > 1
-
-            for seg_idx, (seg_node_ids, seg_elevs, seg_dists, seg_speed) in enumerate(segments):
-                if sum(seg_dists) < params.min_route_length_m:
-                    continue
-
-                candidate_set = frozenset(seg_node_ids)
-                if any(_jaccard(candidate_set, s) > _DEDUP_THRESHOLD for s in emitted_node_sets):
-                    continue
-                emitted_node_sets.append(candidate_set)
-
-                if was_split:
-                    seg_coords = [[nodes[n].lon, nodes[n].lat] for n in seg_node_ids if n in nodes]
-                    # First segment inherits the original peak's group; later segments
-                    # start at a new location and belong in their own group.
-                    start_node_id = raw_route.start_node_id if seg_idx == 0 else seg_node_ids[0]
-                    route = build_route_from_data(
-                        seg_node_ids, seg_coords, seg_elevs, seg_dists, G,
-                        start_node_id=start_node_id,
-                    )
-                else:
-                    route = raw_route
-
-                route.speed_profile = list(seg_speed)
-                route.top_speed_kmh = max(seg_speed) if seg_speed else 0.0
-                route.avg_speed_kmh = sum(seg_speed) / len(seg_speed) if seg_speed else 0.0
-
-                compute_flow_score(route, G, nodes, config)
+            for route in finalizer.finalize(raw_route):
                 yield _route_event(route)
 
         timings["pathfinding"] = time.perf_counter() - t0
@@ -415,6 +316,100 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
+
+# ── Collections ───────────────────────────────────────────────────────────────
+#
+# Curated famous descents, precomputed offline by scripts/build_collections.py. No
+# pipeline work happens at request time — roads don't move, so we build once and
+# commit the result. Routes here are the same shape as /search routes (both come from
+# pipeline.route_payload), so the frontend renders them with the same components.
+#
+# The payload is split across two endpoints because a single spot's routes are ~65 KB
+# of geometry/elevation/speed samples: the index (no geometry) stays small enough to
+# load on tab open, and the heavy part is fetched only for the spot the user picks.
+
+COLLECTIONS_PATH = Path(__file__).resolve().parent / "data" / "collections.json"
+
+# Parsed collections.json, invalidated on mtime change so a rebuild is picked up
+# without restarting the dev server.
+_collections_cache: tuple[float, dict] | None = None
+
+
+def _load_collections() -> dict:
+    """Parse collections.json, caching on mtime.
+
+    An un-built checkout is a normal state, not a server fault — it reads as an empty
+    collection so the tab shows its empty state rather than an error.
+    """
+    global _collections_cache
+    if not COLLECTIONS_PATH.exists():
+        return {"version": 1, "cities": []}
+
+    mtime = COLLECTIONS_PATH.stat().st_mtime
+    if _collections_cache is not None and _collections_cache[0] == mtime:
+        return _collections_cache[1]
+
+    try:
+        doc = json.loads(COLLECTIONS_PATH.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"collections.json is corrupt: {exc}. Rebuild with "
+                   f"`python -m backend.scripts.build_collections --clean`.",
+        )
+    _collections_cache = (mtime, doc)
+    return doc
+
+
+def _spot_summary(entry: dict) -> dict:
+    """Index-card view of a spot: metadata plus headline stats, minus all geometry."""
+    routes = entry.get("routes", [])
+    best = routes[0] if routes else None
+    return {
+        "slug": entry["slug"],
+        "name": entry["name"],
+        "state": entry["state"],
+        "blurb": entry["blurb"],
+        "discipline": entry["discipline"],
+        "notes": entry["notes"],
+        "center": entry["center"],
+        "bbox": entry["bbox"],
+        "route_count": len(routes),
+        # Headline stats come from the best route (the builder sorts best-first).
+        "length_m": best["metadata"]["length_m"] if best else 0,
+        "total_descent_m": best["metadata"]["total_descent_m"] if best else 0,
+        "avg_grade_pct": best["metadata"]["avg_grade_pct"] if best else 0,
+        "top_speed_kmh": best["top_speed_kmh"] if best else 0,
+        "flow_grade": best["flow_grade"] if best else "",
+    }
+
+
+@app.get("/collections")
+async def collections():
+    """Index of curated spots by city — metadata and headline stats, no route geometry.
+
+    Deliberately light. Fetch /collections/{slug} for a spot's actual routes.
+    """
+    doc = _load_collections()
+    return {
+        "version": doc.get("version", 1),
+        "cities": [
+            {"city": c["city"], "spots": [_spot_summary(s) for s in c.get("spots", [])]}
+            for c in doc.get("cities", [])
+        ],
+    }
+
+
+@app.get("/collections/{slug}")
+async def collection_spot(slug: str):
+    """One curated spot, with its full routes."""
+    doc = _load_collections()
+    for city in doc.get("cities", []):
+        for entry in city.get("spots", []):
+            if entry["slug"] == slug:
+                return entry
+    raise HTTPException(status_code=404, detail=f"Unknown collection spot '{slug}'")
+
 
 @app.post("/search")
 async def search(req: SearchRequest, request: Request):

@@ -1,17 +1,53 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearch } from './hooks/useSearch'
+import { useCollections } from './hooks/useCollections'
 import { usePersistedState } from './hooks/usePersistedState'
 import { usePhysics } from './hooks/usePhysics'
 import { useIsMobile } from './hooks/useIsMobile'
 import { HillbombMap } from './components/Map/HillbombMap'
 import { RouteList } from './components/RouteList/RouteList'
 import type { SortMode } from './components/RouteList/RouteList'
+import { CollectionsPanel } from './components/Collections/CollectionsPanel'
 import { ProfilePanel } from './components/ProfilePanel/ProfilePanel'
 import { RiderSettings } from './components/RiderSettings/RiderSettings'
 import { SearchControls, DEFAULT_ROAD_SIZE_STEP, ROAD_SIZE_STEPS } from './components/SearchControls/SearchControls'
 import type { SurfaceCategory } from './components/SearchControls/SearchControls'
 import { RIDER_PROFILES } from './types'
 import type { RiderProfile, RiderParams, SearchOptions, Toggles, StartGroup } from './types'
+
+type Tab = 'search' | 'collections'
+
+const TAB_LABEL: Record<Tab, string> = { search: 'Search', collections: 'Collections' }
+
+function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  return (
+    <div role="tablist" aria-label="Route source" style={{ display: 'flex', gap: '4px' }}>
+      {(Object.keys(TAB_LABEL) as Tab[]).map(t => (
+        <button
+          key={t}
+          role="tab"
+          aria-selected={tab === t}
+          onClick={() => onChange(t)}
+          style={{
+            flex: 1,
+            fontSize: '12px',
+            fontWeight: tab === t ? 600 : 400,
+            padding: '5px 10px',
+            borderRadius: '5px',
+            border: '1px solid',
+            borderColor: tab === t ? '#3b82f6' : '#d1d5db',
+            background: tab === t ? '#eff6ff' : '#fff',
+            color: tab === t ? '#1d4ed8' : '#6b7280',
+            cursor: 'pointer',
+            minHeight: '32px',
+          }}
+        >
+          {TAB_LABEL[t]}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 const DEFAULT_TOGGLES: Toggles = {
   avoid_stoplights: true,
@@ -29,7 +65,9 @@ const DEFAULT_MIN_DISTANCE_M = 500
 
 export default function App() {
   const { isSearching, routes, statusMessage, error, startSearch, stopSearch } = useSearch()
+  const collections = useCollections()
 
+  const [tab, setTab] = useState<Tab>('search')
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null)
   const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null)
@@ -56,10 +94,19 @@ export default function App() {
     [routes, minDistanceM],
   )
 
+  // Whatever the map and route list are currently showing. Collections and search are
+  // separate sources of the same `Route` shape, so everything downstream of this —
+  // grouping, the map, the profile panel, live physics — is identical for both.
+  // The min-distance filter is deliberately search-only: a curated route is curated.
+  const displayedRoutes = useMemo(
+    () => tab === 'collections' ? (collections.activeSpot?.routes ?? []) : filteredRoutes,
+    [tab, collections.activeSpot, filteredRoutes],
+  )
+
   // Group routes by start_node_id; sort groups by selected sort mode
   const groups = useMemo((): StartGroup[] => {
     const map = new Map<string, typeof routes>()
-    for (const r of filteredRoutes) {
+    for (const r of displayedRoutes) {
       const key = String(r.start_node_id)
       const arr = map.get(key) ?? []
       arr.push(r)
@@ -79,7 +126,7 @@ export default function App() {
       })
     }
     return result.sort((a, b) => sortValue(b.routes[0]) - sortValue(a.routes[0]))
-  }, [filteredRoutes, sortMode])
+  }, [displayedRoutes, sortMode])
 
   // Flattened sort order: route_id → global rank across all groups, in the order
   // the sidebar shows them. Used by the map to resolve overlapping route clicks
@@ -107,8 +154,8 @@ export default function App() {
   }, [activeGroupId])
 
   const activeRoute = useMemo(
-    () => activeRouteId ? routes.find(r => r.route_id === activeRouteId) ?? null : null,
-    [routes, activeRouteId],
+    () => activeRouteId ? displayedRoutes.find(r => r.route_id === activeRouteId) ?? null : null,
+    [displayedRoutes, activeRouteId],
   )
 
   const livePhysics = usePhysics(activeRoute, riderParams)
@@ -143,6 +190,37 @@ export default function App() {
   useEffect(() => {
     if (isMobile && activeGroupId) setMobilePanelOpen(true)
   }, [isMobile, activeGroupId])
+
+  // Fetch the collections index the first time the tab is opened — not on mount, so
+  // a user who never opens it never pays for it. loadIndex() dedups internally.
+  useEffect(() => {
+    if (tab === 'collections') collections.loadIndex()
+  }, [tab, collections])
+
+  // Opening a spot: select its best line, which makes the map's fit-bounds effect
+  // fly to it. Routes are already in `displayedRoutes` by the time this runs.
+  useEffect(() => {
+    const spot = collections.activeSpot
+    if (!spot || spot.routes.length === 0) return
+    setActiveGroupId(String(spot.routes[0].start_node_id))
+    setScrubPosition(null)
+  }, [collections.activeSpot])
+
+  const clearSelection = useCallback(() => {
+    setActiveGroupId(null)
+    setActiveRouteId(null)
+    setScrubPosition(null)
+  }, [])
+
+  const handleTabChange = useCallback((next: Tab) => {
+    setTab(next)
+    clearSelection()
+  }, [clearSelection])
+
+  const handleBackToCollections = useCallback(() => {
+    collections.clearSpot()
+    clearSelection()
+  }, [collections, clearSelection])
 
   const handleSearch = useCallback(() => {
     const [, maxRoadRank] = ROAD_SIZE_STEPS[roadSizeStep]
@@ -185,7 +263,7 @@ export default function App() {
         {/* Map: fills entire screen */}
         <div style={{ position: 'absolute', inset: 0 }}>
           <HillbombMap
-            routes={filteredRoutes}
+            routes={displayedRoutes}
             activeGroupId={activeGroupId}
             activeRouteId={activeRouteId}
             hoveredGroupId={hoveredGroupId}
@@ -198,8 +276,9 @@ export default function App() {
           />
         </div>
 
-        {/* Floating search/stop button — only when panel is collapsed */}
-        {!mobilePanelOpen && (
+        {/* Floating search/stop button — only when panel is collapsed, and only on
+            the search tab (collections are precomputed; there's nothing to search). */}
+        {!mobilePanelOpen && tab === 'search' && (
           <div style={{
             position: 'absolute',
             bottom: '68px',
@@ -292,7 +371,9 @@ export default function App() {
             <div style={{ width: 40, height: 4, background: '#d1d5db', borderRadius: 2 }} />
             {!mobilePanelOpen && (
               <span style={{ fontSize: '12px', color: '#6b7280' }}>
-                {routes.length > 0
+                {tab === 'collections'
+                  ? (collections.activeSpot?.name ?? 'Tap to browse collections')
+                  : routes.length > 0
                   ? `${routes.length} route${routes.length !== 1 ? 's' : ''} found — tap to view`
                   : isSearching
                   ? (statusMessage ?? 'Searching…')
@@ -304,24 +385,51 @@ export default function App() {
           {/* Panel content: route list scrolls, controls pinned at bottom */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-            {/* Route list — grows to fill space, scrolls internally */}
+            {/* Tabs */}
+            <div style={{ flexShrink: 0, padding: '0 12px 8px' }}>
+              <TabBar tab={tab} onChange={handleTabChange} />
+            </div>
+
+            {/* Route list / collections — grows to fill space, scrolls internally */}
             <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <RouteList
-                groups={groups}
-                activeGroupId={activeGroupId}
-                activeRouteId={activeRouteId}
-                onSelectGroup={handleSelectGroup}
-                onSelectRoute={handleSelectRoute}
-                onHoverGroup={setHoveredGroupId}
-                onHoverRoute={setHoveredRouteId}
-                sortMode={sortMode}
-                onSortModeChange={setSortMode}
-                statusMessage={statusMessage}
-                isSearching={isSearching}
-                error={error}
-                hasSearched={hasSearched}
-                fillHeight={true}
-              />
+              {tab === 'search' ? (
+                <RouteList
+                  groups={groups}
+                  activeGroupId={activeGroupId}
+                  activeRouteId={activeRouteId}
+                  onSelectGroup={handleSelectGroup}
+                  onSelectRoute={handleSelectRoute}
+                  onHoverGroup={setHoveredGroupId}
+                  onHoverRoute={setHoveredRouteId}
+                  sortMode={sortMode}
+                  onSortModeChange={setSortMode}
+                  statusMessage={statusMessage}
+                  isSearching={isSearching}
+                  error={error}
+                  hasSearched={hasSearched}
+                  fillHeight={true}
+                />
+              ) : (
+                <CollectionsPanel
+                  cities={collections.cities}
+                  activeSpot={collections.activeSpot}
+                  isLoadingIndex={collections.isLoadingIndex}
+                  isLoadingSpot={collections.isLoadingSpot}
+                  error={collections.error}
+                  onSelectSpot={collections.selectSpot}
+                  onBack={handleBackToCollections}
+                  groups={groups}
+                  activeGroupId={activeGroupId}
+                  activeRouteId={activeRouteId}
+                  onSelectGroup={handleSelectGroup}
+                  onSelectRoute={handleSelectRoute}
+                  onHoverGroup={setHoveredGroupId}
+                  onHoverRoute={setHoveredRouteId}
+                  sortMode={sortMode}
+                  onSortModeChange={setSortMode}
+                  fillHeight={true}
+                />
+              )}
             </div>
 
             {/* Profile panel — pinned below route list */}
@@ -346,23 +454,25 @@ export default function App() {
               />
             </div>
 
-            {/* Search controls — always visible at bottom */}
-            <div style={{ flexShrink: 0 }}>
-              <SearchControls
-                isSearching={isSearching}
-                toggles={toggles}
-                onTogglesChange={setToggles}
-                roadSizeStep={roadSizeStep}
-                onRoadSizeChange={setRoadSizeStep}
-                allowedSurfaces={allowedSurfaces}
-                onAllowedSurfacesChange={setAllowedSurfaces}
-                minDistanceM={minDistanceM}
-                onMinDistanceChange={setMinDistanceM}
-                onSearch={handleSearch}
-                onStop={stopSearch}
-                activeRouteId={activeRouteId}
-              />
-            </div>
+            {/* Search controls — search tab only; collections are precomputed. */}
+            {tab === 'search' && (
+              <div style={{ flexShrink: 0 }}>
+                <SearchControls
+                  isSearching={isSearching}
+                  toggles={toggles}
+                  onTogglesChange={setToggles}
+                  roadSizeStep={roadSizeStep}
+                  onRoadSizeChange={setRoadSizeStep}
+                  allowedSurfaces={allowedSurfaces}
+                  onAllowedSurfacesChange={setAllowedSurfaces}
+                  minDistanceM={minDistanceM}
+                  onMinDistanceChange={setMinDistanceM}
+                  onSearch={handleSearch}
+                  onStop={stopSearch}
+                  activeRouteId={activeRouteId}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -374,7 +484,7 @@ export default function App() {
       {/* Map */}
       <div style={{ flex: 1, position: 'relative' }}>
         <HillbombMap
-          routes={filteredRoutes}
+          routes={displayedRoutes}
           activeGroupId={activeGroupId}
           activeRouteId={activeRouteId}
           hoveredGroupId={hoveredGroupId}
@@ -399,26 +509,48 @@ export default function App() {
         {/* Header */}
         <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827' }}>Hillbomb</h1>
-          <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#9ca3af' }}>Find the best descents near you</p>
+          <p style={{ margin: '2px 0 8px', fontSize: '11px', color: '#9ca3af' }}>Find the best descents near you</p>
+          <TabBar tab={tab} onChange={handleTabChange} />
         </div>
 
-        {/* Route list */}
+        {/* Route list / collections */}
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <RouteList
-            groups={groups}
-            activeGroupId={activeGroupId}
-            activeRouteId={activeRouteId}
-            onSelectGroup={handleSelectGroup}
-            onSelectRoute={handleSelectRoute}
-            onHoverGroup={setHoveredGroupId}
-            onHoverRoute={setHoveredRouteId}
-            sortMode={sortMode}
-            onSortModeChange={setSortMode}
-            statusMessage={statusMessage}
-            isSearching={isSearching}
-            error={error}
-            hasSearched={hasSearched}
-          />
+          {tab === 'search' ? (
+            <RouteList
+              groups={groups}
+              activeGroupId={activeGroupId}
+              activeRouteId={activeRouteId}
+              onSelectGroup={handleSelectGroup}
+              onSelectRoute={handleSelectRoute}
+              onHoverGroup={setHoveredGroupId}
+              onHoverRoute={setHoveredRouteId}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+              statusMessage={statusMessage}
+              isSearching={isSearching}
+              error={error}
+              hasSearched={hasSearched}
+            />
+          ) : (
+            <CollectionsPanel
+              cities={collections.cities}
+              activeSpot={collections.activeSpot}
+              isLoadingIndex={collections.isLoadingIndex}
+              isLoadingSpot={collections.isLoadingSpot}
+              error={collections.error}
+              onSelectSpot={collections.selectSpot}
+              onBack={handleBackToCollections}
+              groups={groups}
+              activeGroupId={activeGroupId}
+              activeRouteId={activeRouteId}
+              onSelectGroup={handleSelectGroup}
+              onSelectRoute={handleSelectRoute}
+              onHoverGroup={setHoveredGroupId}
+              onHoverRoute={setHoveredRouteId}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+            />
+          )}
         </div>
 
         {/* Profile panel — shows best route in active group */}
@@ -441,21 +573,23 @@ export default function App() {
           activeRouteId={activeRouteId}
         />
 
-        {/* Search controls + toggles */}
-        <SearchControls
-          isSearching={isSearching}
-          toggles={toggles}
-          onTogglesChange={setToggles}
-          roadSizeStep={roadSizeStep}
-          onRoadSizeChange={setRoadSizeStep}
-          allowedSurfaces={allowedSurfaces}
-          onAllowedSurfacesChange={setAllowedSurfaces}
-          minDistanceM={minDistanceM}
-          onMinDistanceChange={setMinDistanceM}
-          onSearch={handleSearch}
-          onStop={stopSearch}
-          activeRouteId={activeRouteId}
-        />
+        {/* Search controls + toggles — search tab only; collections are precomputed. */}
+        {tab === 'search' && (
+          <SearchControls
+            isSearching={isSearching}
+            toggles={toggles}
+            onTogglesChange={setToggles}
+            roadSizeStep={roadSizeStep}
+            onRoadSizeChange={setRoadSizeStep}
+            allowedSurfaces={allowedSurfaces}
+            onAllowedSurfacesChange={setAllowedSurfaces}
+            minDistanceM={minDistanceM}
+            onMinDistanceChange={setMinDistanceM}
+            onSearch={handleSearch}
+            onStop={stopSearch}
+            activeRouteId={activeRouteId}
+          />
+        )}
       </div>
     </div>
   )

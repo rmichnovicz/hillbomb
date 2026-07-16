@@ -46,6 +46,51 @@ export interface StartGroup {
   startCoord: [number, number]
 }
 
+// ── Collections ───────────────────────────────────────────────────────────────
+// Curated famous descents, precomputed by backend/scripts/build_collections.py.
+// The payload is split in two: GET /collections returns the index (no geometry,
+// small enough to load on tab open), GET /collections/{slug} returns one spot's
+// full routes. A collection route is an ordinary `Route` — same producer on the
+// backend (pipeline.route_payload) — so every route component renders it as-is.
+
+/** Index-card view of a curated spot: metadata + the best route's headline stats. */
+export interface CollectionSpotSummary {
+  slug: string
+  name: string
+  state: string
+  blurb: string
+  discipline: 'cycling' | 'skate' | 'both'
+  /** Gotchas worth showing: closures, legality, surface. May be empty. */
+  notes: string
+  center: [number, number]  // [lon, lat]
+  bbox: [number, number, number, number]  // south, west, north, east
+  route_count: number
+  // Headline stats, from the spot's best route.
+  length_m: number
+  total_descent_m: number
+  avg_grade_pct: number
+  top_speed_kmh: number
+  flow_grade: string
+}
+
+export interface CollectionCity {
+  city: string
+  spots: CollectionSpotSummary[]
+}
+
+export interface CollectionsIndex {
+  version: number
+  cities: CollectionCity[]
+}
+
+/** One curated spot with its full routes (GET /collections/{slug}). */
+export interface CollectionSpot extends CollectionSpotSummary {
+  city: string
+  rider_profile: RiderProfile
+  built_at: string
+  routes: Route[]
+}
+
 export interface RiderParams {
   weight_kg: number
   drag_coefficient: number
