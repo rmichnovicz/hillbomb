@@ -77,7 +77,9 @@ SPOTS: list[Spot] = [
             "postcard climb in the Bay Area."
         ),
         discipline="cycling",
-        # Conzelman Road is tagged `secondary`; the default rank cap (6) covers it.
+        # Every Conzelman way is tagged `residential` (rank 3) as of 2026-07 — despite
+        # being a major named climb — so the default cap of 6 covers it with room to
+        # spare, and the connecting roads at the ridge stay rideable too.
         max_road_rank=6,
         notes=(
             "The westbound section past Hawk Hill is one-way downhill — the pathfinder "

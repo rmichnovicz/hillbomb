@@ -6,7 +6,8 @@ the Golden Gate Bridge. Two classic descent routes:
   - Frontside: heads east from Hawk Hill toward the bridge (secondary descent)
   - Backside: heads west and curves north, descending the far side of the hill
 
-Both routes are on OSM ways named "Conzelman Road", tagged as `secondary`.
+Both routes are on OSM ways named "Conzelman Road", tagged `highway=residential`
+(verified 2026-07: all 18 ways in this bbox) despite being a major named climb.
 
 This test hits the real Overpass and 3DEP elevation APIs on first run, then
 uses the disk cache (HILLBOMB_CACHE_DIR, default ~/.cache/hillbomb/) for all
@@ -28,8 +29,8 @@ from ..pathfinding import find_routes
 # south, west, north, east — decimal degrees
 HAWK_HILL_BBOX = (37.820, -122.515, 37.845, -122.470)
 
-# Conzelman Road is tagged `secondary`; include surrounding road types for
-# context so the graph has proper intersections.
+# Conzelman itself is `residential`; the rest are included so the graph has proper
+# intersections with the roads it meets along the ridge.
 HAWK_HILL_ROAD_TYPES = {
     "secondary", "secondary_link",
     "tertiary", "tertiary_link",
@@ -45,7 +46,8 @@ def test_conzelman_road_ways_present_in_osm():
     conzelman = [w for w in ways if "Conzelman" in w.name]
     assert conzelman, (
         "No Conzelman Road ways returned from Overpass. "
-        "Check bbox or road_types (Conzelman Road is tagged `secondary`)."
+        "Check the bbox — fetch_osm_data pulls the whole classified network, so a "
+        "missing road here means the box is wrong, not the road-type filter."
     )
 
 
