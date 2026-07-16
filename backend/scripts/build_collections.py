@@ -132,10 +132,13 @@ def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
     kept = matched[:spot.max_routes]
 
     elapsed = time.perf_counter() - t0
+    # flush: a cold build takes minutes and is usually piped to a log, where Python's
+    # block buffering would otherwise hide all progress until the very end.
     print(
         f"    {len(matched)} route(s) on {'/'.join(spot.osm_way_names)}, keeping {len(kept)}"
         f" — best: {kept[0].length_m:.0f} m, {kept[0].total_descent_m:.0f} m drop,"
-        f" {kept[0].top_speed_kmh:.0f} km/h, flow {kept[0].flow_grade}  [{elapsed:.1f}s]"
+        f" {kept[0].top_speed_kmh:.0f} km/h, flow {kept[0].flow_grade}  [{elapsed:.1f}s]",
+        flush=True,
     )
 
     south, west, north, east = spot.bbox
@@ -197,9 +200,12 @@ def write_output(entries: dict[str, dict]) -> None:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(doc, indent=2) + "\n")
 
+
+def _report_output(entries: dict[str, dict]) -> None:
+    where = OUT_PATH.relative_to(Path.cwd()) if OUT_PATH.is_relative_to(Path.cwd()) else OUT_PATH
     n_routes = sum(len(e["routes"]) for e in entries.values())
-    print(f"\nWrote {OUT_PATH.relative_to(Path.cwd()) if OUT_PATH.is_relative_to(Path.cwd()) else OUT_PATH}"
-          f" — {len(entries)} spot(s), {len(cities)} cit(ies), {n_routes} route(s)")
+    n_cities = len({s.city for s in SPOTS if s.slug in entries})
+    print(f"\nWrote {where} — {len(entries)} spot(s), {n_cities} cit(ies), {n_routes} route(s)")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -248,19 +254,22 @@ def main() -> int:
     failures: list[tuple[str, str]] = []
 
     for i, spot in enumerate(spots, 1):
-        print(f"[{i}/{len(spots)}] {spot.slug} — {spot.name}")
+        print(f"[{i}/{len(spots)}] {spot.slug} — {spot.name}", flush=True)
         try:
             entries[spot.slug] = build_spot(spot, elev_svc)
         except SpotBuildError as exc:
             # Expected class of failure: the spot definition is wrong. Keep going —
             # one bad spot shouldn't block the rest of the build.
-            print(f"    FAILED: {exc}", file=sys.stderr)
+            print(f"    FAILED: {exc}", file=sys.stderr, flush=True)
             failures.append((spot.slug, str(exc)))
         except Exception as exc:  # network, elevation, pathfinding — unexpected
-            print(f"    ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(f"    ERROR: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             failures.append((spot.slug, f"{type(exc).__name__}: {exc}"))
+        # Write after every spot: a cold build is minutes of network work, and losing
+        # all of it to a crash on spot 20 would be miserable.
+        write_output(entries)
 
-    write_output(entries)
+    _report_output(entries)
 
     if failures:
         print(f"\n{len(failures)} spot(s) failed:", file=sys.stderr)

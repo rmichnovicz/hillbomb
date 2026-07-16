@@ -8,6 +8,7 @@ override the TTL in seconds (0 = no cache).
 """
 
 import hashlib
+import logging
 import os
 import pickle
 import time
@@ -16,8 +17,19 @@ from pathlib import Path
 from .types import OSMNode, OSMWay
 from .config import HIGHWAY_RANK
 
+log = logging.getLogger("hillbomb.overpass")
+
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 TIMEOUT_SECONDS = 60
+
+# Overpass runs a small number of slots per client IP and sheds anything beyond them:
+# 429 when the rate limit is hit, 504 when a slot times out. Both are transient and
+# the published usage policy asks clients to back off rather than retry immediately.
+# Without this, any script fetching several bboxes in a row (the collections builder
+# fetches 24) reliably fails partway through.
+_RETRY_STATUS = frozenset({429, 504})
+_MAX_ATTEMPTS = int(os.environ.get("HILLBOMB_OVERPASS_ATTEMPTS", "4"))
+_BACKOFF_BASE_S = float(os.environ.get("HILLBOMB_OVERPASS_BACKOFF", "5"))
 
 # The whole classified road network is fetched on every search, independent of
 # the rider's rideable road_types. Traversability (what may actually be ridden)
@@ -35,6 +47,43 @@ _CACHE_TTL = int(os.environ.get("HILLBOMB_CACHE_TTL", "86400"))  # 24 h
 def _overpass_cache_path(bbox: tuple) -> Path:
     digest = hashlib.sha1(str(bbox).encode()).hexdigest()[:16]
     return _OVERPASS_CACHE_DIR / f"{digest}.pkl"
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retrying. Honors Retry-After, else exponential backoff."""
+    header = resp.headers.get("Retry-After")
+    if header:
+        try:
+            # Only the delta-seconds form is handled; the HTTP-date form is rare here
+            # and the exponential fallback is a fine answer for it.
+            return max(0.0, float(int(header)))
+        except ValueError:
+            pass
+    return _BACKOFF_BASE_S * (2 ** (attempt - 1))
+
+
+def _post_with_retry(client: httpx.Client, query: str) -> dict:
+    """POST the query, backing off on Overpass's transient rejections.
+
+    Raises the underlying HTTPStatusError once attempts are exhausted, so callers
+    still see a real failure rather than an empty result.
+    """
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        resp = client.post(
+            OVERPASS_URL,
+            data={"data": query},
+            headers={"Accept": "*/*", "User-Agent": "hillbomb/0.1"},
+        )
+        if resp.status_code not in _RETRY_STATUS or attempt == _MAX_ATTEMPTS:
+            resp.raise_for_status()
+            return resp.json()
+        delay = _retry_delay(resp, attempt)
+        log.warning(
+            "Overpass returned %d (attempt %d/%d); retrying in %.0fs",
+            resp.status_code, attempt, _MAX_ATTEMPTS, delay,
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable: loop either returns or raises")  # pragma: no cover
 
 
 def _build_query(bbox: tuple[float, float, float, float]) -> str:
@@ -106,11 +155,8 @@ def fetch_osm_data(
 
     query = _build_query(bbox)
 
-    headers = {"Accept": "*/*", "User-Agent": "hillbomb/0.1"}
     with httpx.Client(timeout=TIMEOUT_SECONDS + 10) as client:
-        resp = client.post(OVERPASS_URL, data={"data": query}, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _post_with_retry(client, query)
 
     # First pass: collect all node coords and tags.
     # A traffic-control node almost always also lies on a way, so it appears
