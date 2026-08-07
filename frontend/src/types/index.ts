@@ -31,6 +31,12 @@ export interface Route {
   flow_grade: string
   /** Surface category → percentage of route distance (paved/gravel/unpaved/cobblestone/unknown). */
   surface_pcts: Record<string, number>
+  /**
+   * Hardest segment's 0-6 OSM `mtb:scale` grade, or null when no segment on the route
+   * carried a difficulty tag — which is most routes, since coverage is thin.
+   * null means UNKNOWN, not easy: render it as "—", never as a grade of 0.
+   */
+  trail_difficulty: number | null
   /** Stop signs / traffic signals on the route, in path order (start and end included). */
   stops: RouteStop[]
   speed_profile: number[]
@@ -59,7 +65,13 @@ export interface CollectionSpotSummary {
   name: string
   state: string
   blurb: string
-  discipline: 'cycling' | 'skate' | 'both'
+  /**
+   * Sports this spot is for — a list, since plenty of descents suit more than one.
+   * Deliberately `string[]` and not a union: the Collections filter builds its chips
+   * from whatever tags the data actually carries, so adding "gravel" or "mtb" to a spot
+   * is a backend data edit with no frontend change. See backend/config.py DISCIPLINES.
+   */
+  disciplines: string[]
   /** Gotchas worth showing: closures, legality, surface. May be empty. */
   notes: string
   center: [number, number]  // [lon, lat]
@@ -98,10 +110,25 @@ export interface RiderParams {
   crr_physics: number
   /** Rolling resistance used during pathfinding (affects which routes are found; requires re-search). */
   crr_pathfinding: number
+  /**
+   * Speed the rider will not exceed, km/h. Omitted/null = uncapped.
+   *
+   * Stands in for a brake, which this model does not have. Only the dirt profiles set
+   * it: on tarmac, drag and Crr alone land near reported speeds, but on a loose fire
+   * road the force balance computes 70 km/h where a real rider is braking at 30,
+   * because traction and sightlines aren't forces. See backend/config.py RiderParams.
+   */
+  max_speed_kmh?: number | null
 }
 
-export type RiderProfile = 'longboarder' | 'cyclist_upright' | 'cyclist_drops'
+export type RiderProfile =
+  | 'longboarder'
+  | 'cyclist_upright'
+  | 'cyclist_drops'
+  | 'gravel'
+  | 'mtb'
 
+/** Mirrors backend/config.py RIDER_PROFILES — keep the two in sync. */
 export const RIDER_PROFILES: Record<RiderProfile, RiderParams> = {
   longboarder: {
     weight_kg: 80,
@@ -124,6 +151,22 @@ export const RIDER_PROFILES: Record<RiderProfile, RiderParams> = {
     crr_physics: 0.003,
     crr_pathfinding: 0.003,
   },
+  gravel: {
+    weight_kg: 82,
+    drag_coefficient: 0.80,
+    frontal_area_m2: 0.40,
+    crr_physics: 0.010,
+    crr_pathfinding: 0.010,
+    max_speed_kmh: 55,
+  },
+  mtb: {
+    weight_kg: 85,
+    drag_coefficient: 1.00,
+    frontal_area_m2: 0.45,
+    crr_physics: 0.030,
+    crr_pathfinding: 0.030,
+    max_speed_kmh: 40,
+  },
 }
 
 export interface Toggles {
@@ -144,6 +187,8 @@ export interface SearchOptions {
   toggles?: Partial<Toggles>
   max_road_rank?: number
   allowed_surface_categories?: string[]
+  /** Cap on 0-6 mtb:scale. Untagged ways are always allowed through — see backend/pipeline.py. */
+  max_trail_difficulty?: number | null
   crr_pathfinding?: number
 }
 
@@ -152,7 +197,7 @@ export type SSEEvent =
   | { type: 'queued'; position: number }
   | { type: 'busy'; message: string }
   | { type: 'status'; message: string }
-  | { type: 'route'; route_id: string; start_node_id: number; geometry: RouteGeometry; metadata: RouteMetadata; elevations: number[]; segment_distances: number[]; flow_score: number; flow_grade: string; surface_pcts: Record<string, number>; stops: RouteStop[]; speed_profile: number[]; top_speed_kmh: number; avg_speed_kmh: number }
+  | { type: 'route'; route_id: string; start_node_id: number; geometry: RouteGeometry; metadata: RouteMetadata; elevations: number[]; segment_distances: number[]; flow_score: number; flow_grade: string; surface_pcts: Record<string, number>; trail_difficulty: number | null; stops: RouteStop[]; speed_profile: number[]; top_speed_kmh: number; avg_speed_kmh: number }
   | { type: 'candidate'; geometry: RouteGeometry }
   | { type: 'error'; message: string }
   | { type: 'done' }

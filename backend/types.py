@@ -23,6 +23,10 @@ class OSMWay:
     is_tunnel: bool = False
     surface: str = ""  # e.g. "asphalt", "cobblestone", "gravel"
     name: str = ""
+    # Technical difficulty on the 0-6 mtb:scale, or None when the way carries neither
+    # `mtb:scale` nor `sac_scale` — which is most of them. See config.SAC_SCALE_TO_DIFFICULTY
+    # for the derivation and for why "unknown" is a distinct state from "easy".
+    trail_difficulty: int | None = None
     # The full road network is fetched on every search; this flag marks whether a
     # way may actually be ridden. Bigger roads are kept non-traversable so the
     # avoid-bigger/equal-roads toggles can detect (and stop at) a crossing without
@@ -50,6 +54,10 @@ class Route:
     avg_grade_pct: float = 0.0
     flow_score: float = 100.0
     flow_grade: str = "A"
+    # Hardest 0-6 mtb:scale grade on any segment of the route, or None if no segment
+    # was tagged. The maximum rather than an average because difficulty is a gate:
+    # one S4 rock roll in an otherwise smooth descent is what decides who can ride it.
+    trail_difficulty: int | None = None
     # Surface tag → total distance (m) along that surface
     surface_distances: dict[str, float] = field(default_factory=dict)
     # Stop signs / traffic signals on this route, for map display. Includes the

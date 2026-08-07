@@ -284,3 +284,87 @@ def test_toggles_passed_through(client):
         toggles_arg = kwargs.get("toggles") or mock_find.call_args[0][4]
         assert toggles_arg.avoid_stoplights is False
         assert toggles_arg.exclude_tunnels is True
+
+
+# ── Overpass retry surfacing ──────────────────────────────────────────────────
+#
+# The retry backoff can hold a search for ~35 s. These verify the reason reaches
+# the client as it happens, rather than after the stage finally returns.
+
+def test_overpass_retry_emits_status_event(client):
+    def _fake(bbox, on_retry=None):
+        on_retry("429", 1, 4, 5.0)
+        return {}, []
+
+    with patch("backend.main.fetch_osm_data", side_effect=_fake):
+        resp = client.post("/search", json=_request_body())
+
+    msgs = [e["message"] for e in _parse_sse(resp.content) if e["type"] == "status"]
+    assert any("retrying in 5s" in m for m in msgs), msgs
+    assert any("429" in m for m in msgs), msgs
+
+
+def test_overpass_retry_status_precedes_done(client):
+    """Ordering matters: a retry notice arriving after `done` would never render."""
+    def _fake(bbox, on_retry=None):
+        on_retry("ConnectError", 1, 4, 5.0)
+        on_retry("ConnectError", 2, 4, 10.0)
+        return {}, []
+
+    with patch("backend.main.fetch_osm_data", side_effect=_fake):
+        resp = client.post("/search", json=_request_body())
+
+    events = _parse_sse(resp.content)
+    retry_idx = [i for i, e in enumerate(events)
+                 if e["type"] == "status" and "retrying" in e.get("message", "")]
+    assert len(retry_idx) == 2, "both retries should be reported"
+    assert retry_idx[-1] < len(events) - 1, "retry notices must precede the final event"
+
+
+def test_no_retry_status_when_overpass_succeeds(client):
+    """No false alarms on the happy path."""
+    with patch("backend.main.fetch_osm_data", side_effect=lambda bbox, on_retry=None: ({}, [])):
+        resp = client.post("/search", json=_request_body())
+
+    msgs = [e["message"] for e in _parse_sse(resp.content) if e["type"] == "status"]
+    assert not any("retrying" in m for m in msgs), msgs
+
+
+# ── Dirt profiles and the trail-difficulty filter ─────────────────────────────
+
+@pytest.mark.parametrize("profile", ["gravel", "mtb"])
+def test_dirt_rider_profiles_accepted(client, profile):
+    G = _make_graph()
+    with (patch("backend.main.fetch_osm_data", return_value=(_NODES, _WAYS)),
+          patch("backend.main.build_graph", return_value=G),
+          patch("backend.main.find_routes", return_value=iter([]))):
+        resp = client.post("/search", json=_request_body(rider_profile=profile))
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("value", [0, 3, 6, None])
+def test_max_trail_difficulty_accepted_in_range(client, value):
+    G = _make_graph()
+    with (patch("backend.main.fetch_osm_data", return_value=(_NODES, _WAYS)),
+          patch("backend.main.build_graph", return_value=G),
+          patch("backend.main.find_routes", return_value=iter([]))):
+        resp = client.post("/search", json=_request_body(max_trail_difficulty=value))
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("value", [-1, 7, 99])
+def test_max_trail_difficulty_rejected_out_of_range(client, value):
+    """Out-of-range would fail silently: 7 allows everything, -1 excludes every graded
+    way but still returns untagged ones — both look like the filter doing nothing."""
+    resp = client.post("/search", json=_request_body(max_trail_difficulty=value))
+    assert resp.status_code == 422
+
+
+def test_max_trail_difficulty_reaches_mark_traversable(client):
+    G = _make_graph()
+    with (patch("backend.main.fetch_osm_data", return_value=(_NODES, _WAYS)),
+          patch("backend.main.build_graph", return_value=G),
+          patch("backend.main.find_routes", return_value=iter([])),
+          patch("backend.main.mark_traversable") as mt):
+        client.post("/search", json=_request_body(max_trail_difficulty=2))
+    assert mt.call_args.kwargs["max_trail_difficulty"] == 2

@@ -13,10 +13,11 @@ which fails loudly and specifically when it doesn't.
 
 import pytest
 
-from ..config import HIGHWAY_RANK, RIDER_PROFILES, SURFACE_CATEGORIES
+from ..config import DISCIPLINES, HIGHWAY_RANK, RIDER_PROFILES, SURFACE_CATEGORIES
 from ..spots import SPOTS, Spot, by_city, by_slug, cities
 
-_DISCIPLINES = {"cycling", "skate", "both"}
+# The vocabulary lives in config so the UI labels and the data share one source.
+_DISCIPLINES = set(DISCIPLINES)
 _CONFIDENCES = {"high", "medium", "low"}
 
 
@@ -48,16 +49,28 @@ def test_bbox_is_well_formed(spot: Spot):
 def test_bbox_is_tight(spot: Spot):
     """A loose bbox means a slow build and a rude Overpass query.
 
-    ~0.1 degrees is roughly 11 km of latitude — comfortably more than any single
-    named descent needs, so anything above it is a transcription error, not a choice.
+    The cost being guarded is the Overpass fetch, which scales with the *area* of the
+    box, so that is what is capped. This used to be a flat 0.1° cap on each axis, on
+    the reasoning that no single named descent needs 11 km — true of a named road
+    climb, and false the moment trails arrived. A point-to-point descent really does
+    run 14 km in one direction: the Downieville Downhill chains five trails, and
+    Porcupine Rim runs the length of a mesa. Those are long thin corridors, not big
+    boxes — Downieville's area is 0.0093°², against 0.0069°² for Glendora Mountain
+    Road, which passed the old test comfortably.
+
+    A per-axis cap stays, an order of magnitude looser, because it still catches the
+    error the original was really aimed at: a dropped or mistyped digit, which blows
+    out one coordinate rather than gently enlarging the box.
     """
     south, west, north, east = spot.bbox
-    assert north - south <= 0.1, (
-        f"{spot.slug}: bbox spans {north - south:.3f}° of latitude (~{(north - south) * 111:.0f} km). "
-        f"Tighten it — we fetch the entire road network inside it."
+    area = (north - south) * (east - west)
+    assert area <= 0.02, (
+        f"{spot.slug}: bbox covers {area:.4f}°² (~{(north - south) * 111:.0f} x "
+        f"{(east - west) * 88:.0f} km). Tighten it — we fetch the entire road network inside it."
     )
-    assert east - west <= 0.1, (
-        f"{spot.slug}: bbox spans {east - west:.3f}° of longitude. Tighten it."
+    assert north - south <= 0.5 and east - west <= 0.5, (
+        f"{spot.slug}: bbox spans {north - south:.3f}° lat x {east - west:.3f}° lon. "
+        f"That is far larger than any descent — check for a mistyped coordinate."
     )
 
 
@@ -82,6 +95,25 @@ def test_required_text_fields_are_present(spot: Spot):
     assert spot.blurb.strip(), f"{spot.slug}: blurb is empty — it's the whole point of curation"
 
 
+BLURB_MAX_CHARS = 140
+
+
+@pytest.mark.parametrize("spot", SPOTS, ids=lambda s: s.slug)
+def test_blurb_is_short(spot: Spot):
+    """The blurb renders as 11px gray text on a card that already shows the numbers.
+
+    It has one job — "is this the one I click" — and it competes for that job with
+    distance, descent, top speed and flow grade sitting right above it. Long blurbs
+    lose: they push the card to six lines of the least-readable text on it. 140 chars
+    is about two lines in the sidebar. Put hazards, legality and closures in `notes`,
+    which renders as its own callout on the spot page.
+    """
+    assert len(spot.blurb) <= BLURB_MAX_CHARS, (
+        f"{spot.slug}: blurb is {len(spot.blurb)} chars, over the {BLURB_MAX_CHARS} cap. "
+        f"Cut it to where it is + what the descent is like; move caveats to `notes`."
+    )
+
+
 @pytest.mark.parametrize("spot", SPOTS, ids=lambda s: s.slug)
 def test_osm_way_names_are_usable(spot: Spot):
     assert spot.osm_way_names, f"{spot.slug}: osm_way_names is empty — nothing to filter routes by"
@@ -94,7 +126,15 @@ def test_osm_way_names_are_usable(spot: Spot):
 
 @pytest.mark.parametrize("spot", SPOTS, ids=lambda s: s.slug)
 def test_enum_fields_are_valid(spot: Spot):
-    assert spot.discipline in _DISCIPLINES, f"{spot.slug}: bad discipline {spot.discipline!r}"
+    assert spot.disciplines, f"{spot.slug}: disciplines is empty — the spot is for nobody"
+    unknown = set(spot.disciplines) - _DISCIPLINES
+    assert not unknown, (
+        f"{spot.slug}: unknown discipline(s) {sorted(unknown)}; valid: {sorted(_DISCIPLINES)}. "
+        f"The Collections filter derives its chips from these, so a typo becomes a chip."
+    )
+    assert len(set(spot.disciplines)) == len(spot.disciplines), (
+        f"{spot.slug}: duplicate entries in disciplines={spot.disciplines}"
+    )
     assert spot.confidence in _CONFIDENCES, f"{spot.slug}: bad confidence {spot.confidence!r}"
     assert spot.rider_profile in RIDER_PROFILES, (
         f"{spot.slug}: unknown rider_profile {spot.rider_profile!r}; "

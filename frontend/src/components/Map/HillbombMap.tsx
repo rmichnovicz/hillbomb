@@ -3,7 +3,8 @@
  *
  * Active group: all routes solid + per-segment grade-colored line on best route.
  * Inactive groups: dashed, reduced opacity. Hovered group highlighted.
- * Start markers: clickable circles at each group's origin; highlighted when active.
+ * Start markers: clickable chevrons, one per distinct descent direction out of a
+ * start node (a summit can drop two ways), pointing the way you'd drop in.
  *
  * Grade color comes from gradeColor.ts paint expressions.
  */
@@ -12,7 +13,11 @@ import Map, { Source, Layer, type MapRef, type StyleSpecification } from 'react-
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import type { Route } from '../../types'
 import { GRADE_STOPS } from '../../utils/gradeColor'
+import { patchStyleFilters } from '../../utils/styleFilters'
 import 'maplibre-gl/dist/maplibre-gl.css'
+
+/** Map left uncovered when a fit has to reserve space for the bottom sheet. */
+const MIN_VISIBLE_STRIP_PX = 80
 
 const STREET_STYLE = 'https://tiles.openfreemap.org/styles/liberty'
 
@@ -78,22 +83,86 @@ function haversineM([lon1, lat1]: number[], [lon2, lat2]: number[]) {
   return 2 * R * Math.asin(Math.sqrt(a))
 }
 
+// Walk `meters` along a polyline and return the vertex reached, or the last one if the
+// line is shorter. Vertex-granular on purpose: no interpolation, so the returned point
+// is always on the route.
+function vertexAtDistance(coords: number[][], meters: number): number[] {
+  let acc = 0
+  for (let i = 1; i < coords.length; i++) {
+    acc += haversineM(coords[i - 1], coords[i])
+    if (acc >= meters) return coords[i]
+  }
+  return coords[coords.length - 1]
+}
+
 // Compass bearing (deg clockwise from north) of the descent's first ~30m, so the
 // start chevron points the way you'd drop in. Smoothed past the first vertex to
 // avoid noise from a tiny opening segment.
 function dropInBearing(coords: number[][]): number {
   if (!coords || coords.length < 2) return 0
-  let target = coords[coords.length - 1], acc = 0
-  for (let i = 1; i < coords.length; i++) {
-    acc += haversineM(coords[i - 1], coords[i])
-    if (acc >= 30) { target = coords[i]; break }
-  }
+  const target = vertexAtDistance(coords, 30)
   const [lon1, lat1] = coords[0], [lon2, lat2] = target
   const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180
   const Δλ = (lon2 - lon1) * Math.PI / 180
   const y = Math.sin(Δλ) * Math.cos(φ2)
   const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ)
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+}
+
+// Smallest angle between two compass bearings, so 350° and 10° read as 20° apart.
+function bearingGapDeg(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360
+  return d > 180 ? 360 - d : d
+}
+
+// Two descents can leave one node in opposite directions: the Hawk Hill summit drops
+// west toward Point Bonita and east toward the bridge, both off node 12604582833.
+// Keyed on start node alone, they collapsed into a single chevron pointing whichever
+// way the higher-ranked route went, and the other descent got no marker at all. Real
+// data splits cleanly here — the summits that share a node depart either ~0° apart
+// (same drop, diverging later, one marker is right) or 113–180° apart.
+const DISTINCT_DIRECTION_DEG = 45
+
+// Markers sit this far down their own line rather than exactly on the start node. Two
+// descents off one summit share that node, so anchoring both there would stack the
+// chevrons on the same pixel — still visually merged, and only the top one clickable,
+// since the click handler takes the first hit. Nudging each onto its own line separates
+// them once you're zoomed in enough to tell the two descents apart anyway.
+const MARKER_OFFSET_M = 25
+
+/**
+ * One start marker per distinct descent direction, best-ranked route per direction.
+ *
+ * `routes` must be in rank order; the first route seen for a direction is the one the
+ * marker selects when clicked.
+ */
+export function buildStartMarkerFeatures(routes: Route[], activeGroupId: string | null) {
+  const claimed: { groupId: string; bearing: number }[] = []
+  const features = []
+  for (const r of routes) {
+    const coords = r.geometry.coordinates
+    const groupId = String(r.start_node_id)
+    const bearing = dropInBearing(coords)
+    const merged = claimed.some(
+      c => c.groupId === groupId && bearingGapDeg(c.bearing, bearing) < DISTINCT_DIRECTION_DEG,
+    )
+    if (merged) continue
+    claimed.push({ groupId, bearing })
+    features.push({
+      type: 'Feature' as const,
+      properties: {
+        start_node_id: groupId,
+        route_id: r.route_id,
+        is_active: groupId === activeGroupId ? 1 : 0,
+        bearing,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: vertexAtDistance(coords, MARKER_OFFSET_M),
+      },
+    })
+  }
+  return features
 }
 
 // Render a chevron marker to an ImageData for map.addImage. Drawn pointing up
@@ -190,6 +259,35 @@ function ensureMarkerImages(map: MapLibreMap) {
   }
 }
 
+/**
+ * Fetch the street style and hand back a filter-patched copy, or the bare URL if
+ * that fails for any reason. See utils/styleFilters.ts for what is patched and why.
+ *
+ * The patch has to happen *before* MapLibre sees the style. Doing it after —
+ * `setFilter` from an `onStyleData`/`onLoad` handler — is both too late (the
+ * first tiles have already been parsed against the unpatched filters, which is
+ * when the warnings fire) and actively harmful: calling `setFilter` from inside
+ * `styledata` during style init leaves the map with a loaded style, no source
+ * caches, and nothing on screen. So we fetch the JSON ourselves, rewrite it, and
+ * pass an object rather than a URL. MapLibre would have made this exact request
+ * anyway, so it costs one cache hit, not one round trip.
+ *
+ * Falling back to the URL keeps a network hiccup from costing us the base map —
+ * the warnings come back, the map still works.
+ */
+function useStreetStyle(): string | StyleSpecification | null {
+  const [style, setStyle] = useState<string | StyleSpecification | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch(STREET_STYLE)
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((spec: StyleSpecification) => { if (!cancelled) setStyle(patchStyleFilters(spec)) })
+      .catch(() => { if (!cancelled) setStyle(STREET_STYLE) })
+    return () => { cancelled = true }
+  }, [])
+  return style
+}
+
 interface HillbombMapProps {
   routes: Route[]
   activeGroupId: string | null
@@ -201,6 +299,21 @@ interface HillbombMapProps {
   onSelectGroup?: (startNodeId: string) => void
   onSelectPath?: (routeId: string, startNodeId: string) => void
   scrubPosition?: number | null
+  /**
+   * Fit the viewport around *every* displayed route. Fires once per distinct
+   * non-null value, so the caller controls when — a collections region opening,
+   * say — without the map re-zooming on every routes update. Null disables it.
+   */
+  fitAllKey?: string | null
+  /**
+   * Fraction of the map's height hidden behind UI along the bottom edge — on mobile,
+   * the bottom sheet. Fits reserve that much extra space so the routes they just
+   * framed don't land underneath it.
+   *
+   * Read from the live container height at fit time rather than passed in pixels, so
+   * it survives rotation and viewport changes without the caller tracking them.
+   */
+  fitBottomInset?: number
 }
 
 export function HillbombMap({
@@ -214,9 +327,50 @@ export function HillbombMap({
   onSelectGroup,
   onSelectPath,
   scrubPosition,
+  fitAllKey = null,
+  fitBottomInset = 0,
 }: HillbombMapProps) {
   const mapRef = useRef<MapRef>(null)
   const [styleMode, setStyleMode] = useState<MapStyleMode>('street')
+  const streetStyle = useStreetStyle()
+  const lastFitAllKey = useRef<string | null>(null)
+
+  // Hand the MapLibre instance to the e2e suite. Where the viewport ended up is the
+  // only way to tell "fitted to the region" from "still on the hardcoded default",
+  // and that difference is invisible in a screenshot taken from the default's own
+  // city. Nothing in the app reads this.
+  //
+  // A callback ref, not an effect: react-map-gl publishes the handle through
+  // `useImperativeHandle` on a *later* render than the one that mounts <Map>, so
+  // an effect keyed on mount — or on anything else this component knows about —
+  // reads a ref that is still null. The callback fires when the handle actually
+  // attaches. Going through the ref rather than `onLoad` keeps the handle from
+  // waiting on tiles.
+  const attachMapRef = useCallback((ref: MapRef | null) => {
+    mapRef.current = ref
+    const map = ref?.getMap()
+    if (map) {
+      (map.getContainer() as HTMLElement & { _hillbombMap?: MapLibreMap })._hillbombMap = map
+    }
+  }, [])
+
+  /**
+   * Uniform padding, plus whatever the bottom sheet is covering.
+   *
+   * Clamped: MapLibre rejects padding that leaves no viewport, and an open sheet at
+   * 65dvh plus base padding gets close enough to that on a short phone to matter.
+   */
+  const fitPadding = useCallback((base: number): number | { top: number; bottom: number; left: number; right: number } => {
+    const height = mapRef.current?.getMap().getContainer().clientHeight ?? 0
+    if (fitBottomInset <= 0 || height <= 0) return base
+    const room = Math.max(0, height - base - MIN_VISIBLE_STRIP_PX)
+    return {
+      top: base,
+      left: base,
+      right: base,
+      bottom: Math.min(base + fitBottomInset * height, room),
+    }
+  }, [fitBottomInset])
 
   const handleMoveEnd = useCallback(() => {
     if (!onBoundsChange || !mapRef.current) return
@@ -234,10 +388,30 @@ export function HillbombMap({
     const lats = allCoords.map(c => c[1])
     mapRef.current.fitBounds(
       [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
-      { padding: 80, duration: 600 },
+      { padding: fitPadding(80), duration: 600 },
     )
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGroupId]) // intentionally exclude routes: don't re-zoom as routes stream in
+
+  // Zoom to fit every displayed route when the caller asks for it by key. `routes` is
+  // in the deps because the key typically arrives before the routes it refers to (a
+  // region's spots are still loading); the ref makes it fire on the first render that
+  // has both, and not again for the same key.
+  useEffect(() => {
+    if (!fitAllKey || !mapRef.current || routes.length === 0) return
+    if (lastFitAllKey.current === fitAllKey) return
+    lastFitAllKey.current = fitAllKey
+    const coords = routes.flatMap(r => r.geometry.coordinates)
+    if (coords.length === 0) return
+    const lons = coords.map(c => c[0])
+    const lats = coords.map(c => c[1])
+    mapRef.current.fitBounds(
+      [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+      // A metro's worth of descents spans tens of km; cap the zoom so a region with a
+      // single spot doesn't slam into street level.
+      { padding: fitPadding(60), maxZoom: 14, duration: 800 },
+    )
+  }, [fitAllKey, routes, fitPadding])
 
   // Scrub pin: interpolate position along active route geometry
   const scrubCoord = (() => {
@@ -318,29 +492,10 @@ export function HillbombMap({
     }))
   }, [activeRoute])
 
-  // One start-point marker per unique group, with is_active flag for styling
-  const startMarkerFeatures = useMemo(() => {
-    const seen = new Set<string>()
-    return routes
-      .filter(r => {
-        const key = String(r.start_node_id)
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .map(r => ({
-        type: 'Feature' as const,
-        properties: {
-          start_node_id: String(r.start_node_id),
-          is_active: String(r.start_node_id) === activeGroupId ? 1 : 0,
-          bearing: dropInBearing(r.geometry.coordinates),
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: r.geometry.coordinates[0],
-        },
-      }))
-  }, [routes, activeGroupId])
+  const startMarkerFeatures = useMemo(
+    () => buildStartMarkerFeatures(routes, activeGroupId),
+    [routes, activeGroupId],
+  )
 
   // Inactive routes render at full opacity so overlapping dashes don't compound
   // into darker blobs in dense areas. "Recede when a group is selected" is
@@ -349,10 +504,16 @@ export function HillbombMap({
   const inactiveLineColor = isFaded ? '#c4b5fd' : '#a78bfa'
   const inactiveCasingColor = isFaded ? '#94a3b8' : '#475569'
 
+  // The street style is fetched and rewritten before the map is built (see
+  // useStreetStyle), so hold the mount until it lands. It is one request to a CDN
+  // MapLibre would have hit anyway, and mounting early would mean building the map
+  // twice — once per style — on a cold load.
+  if (!streetStyle) return <div style={{ width: '100%', height: '100%' }} />
+
   return (
     <Map
-      ref={mapRef}
-      mapStyle={styleMode === 'satellite' ? SATELLITE_STYLE : STREET_STYLE}
+      ref={attachMapRef}
+      mapStyle={styleMode === 'satellite' ? SATELLITE_STYLE : streetStyle}
       initialViewState={{ longitude: -122.44, latitude: 37.76, zoom: 13 }}
       style={{ width: '100%', height: '100%' }}
       onMoveEnd={handleMoveEnd}
@@ -374,7 +535,9 @@ export function HillbombMap({
           if (MARKER_IMAGE_IDS.has(ev.id)) ensureMarkerImages(map)
         })
       }}
-      onStyleData={e => ensureMarkerImages(e.target)}
+      onStyleData={e => {
+        ensureMarkerImages(e.target)
+      }}
       interactiveLayerIds={['start-markers-symbol', 'inactive-route-lines', 'active-group-lines', 'hovered-glow-line']}
       onClick={e => {
         if (!mapRef.current) return
@@ -389,8 +552,16 @@ export function HillbombMap({
           ? map.queryRenderedFeatures(e.point, { layers: markerLayers })
           : []
         if (markerHits.length > 0) {
-          const id = markerHits[0].properties?.start_node_id
-          if (id) { onSelectGroup?.(String(id)); return }
+          const props = markerHits[0].properties
+          const id = props?.start_node_id
+          if (id) {
+            // A node can carry one marker per direction, so select the descent this
+            // chevron actually points down rather than the group's best route — on a
+            // two-way summit those are different routes.
+            if (props?.route_id) onSelectPath?.(String(props.route_id), String(id))
+            else onSelectGroup?.(String(id))
+            return
+          }
         }
         // Route lines are thin; widen the hit area with a small pixel box so the
         // whole path is easy to click, not just the start marker.

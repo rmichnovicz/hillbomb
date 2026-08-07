@@ -10,6 +10,7 @@ grade convention: positive = uphill (rises/run); negative = downhill.
 """
 
 import math
+from dataclasses import replace
 import pytest
 from ..config import RiderParams, SearchConfig, RIDER_PROFILES
 from ..physics import simulate_speed_profile, split_route_on_zero_speed
@@ -237,3 +238,45 @@ def test_split_drops_fully_stalled_tail():
     result = split_route_on_zero_speed(node_ids, elevs, dists, speed)
     assert len(result) == 1  # only the first, rideable segment survives
     assert result[0][0] == [1, 2, 3]
+
+
+# ── Top-speed cap ─────────────────────────────────────────────────────────────
+#
+# The cap stands in for a brake the model doesn't have. See config.RiderParams.
+
+def test_uncapped_profile_is_unaffected(cyclist, config):
+    """Road profiles set no cap, so nothing about their output may change."""
+    assert cyclist.max_speed_kmh is None
+    profile, top, _ = simulate_speed_profile([300.0] + [300.0 - 15 * i for i in range(1, 21)],
+                                             [100.0] * 20, cyclist, config)
+    assert top > 60, "a 15% descent over 2 km should run away without a cap"
+    assert max(profile) == top
+
+
+def test_cap_clamps_top_speed(config):
+    mtb = RIDER_PROFILES["mtb"]
+    assert mtb.max_speed_kmh == 40
+    # A long, steep, uninterrupted drop — uncapped this pins well past the ceiling.
+    elevations = [600.0 - 15 * i for i in range(41)]
+    profile, top, avg = simulate_speed_profile(elevations, [100.0] * 40, mtb, config)
+    assert top == pytest.approx(40.0, abs=0.01)
+    assert max(profile) <= 40.0 + 1e-9
+    assert avg <= 40.0
+
+
+def test_cap_does_not_floor_a_slow_descent(config):
+    """The cap is a ceiling only: a gentle descent must be unchanged by it."""
+    mtb = RIDER_PROFILES["mtb"]
+    uncapped = replace(mtb, max_speed_kmh=None)
+    elevations = [100.0 - 1.0 * i for i in range(11)]   # 1% grade — nowhere near 40 km/h
+    capped_profile, capped_top, _ = simulate_speed_profile(elevations, [100.0] * 10, mtb, config)
+    plain_profile, plain_top, _ = simulate_speed_profile(elevations, [100.0] * 10, uncapped, config)
+    assert capped_top < 40.0
+    assert capped_profile == pytest.approx(plain_profile)
+
+
+def test_dirt_profiles_are_capped_and_road_profiles_are_not():
+    for name in ("gravel", "mtb"):
+        assert RIDER_PROFILES[name].max_speed_kmh is not None, name
+    for name in ("longboarder", "cyclist_upright", "cyclist_drops"):
+        assert RIDER_PROFILES[name].max_speed_kmh is None, name

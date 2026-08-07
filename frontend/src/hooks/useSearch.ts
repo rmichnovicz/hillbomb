@@ -4,8 +4,14 @@
  * Uses fetch() + ReadableStream instead of EventSource because the backend
  * endpoint is POST /search — EventSource is GET-only.
  * AbortController handles the stop button and new-search cancellation.
+ *
+ * In production this is the one request that leaves the CDN's origin (see api.ts), so
+ * it is also the only one subject to CORS. A POST with a JSON body is not a simple
+ * request, so it costs a preflight OPTIONS — allowed explicitly in main.py's CORS
+ * middleware. Nothing else about the stream changes cross-origin.
  */
 import { useState, useRef, useCallback } from 'react'
+import { searchUrl } from '../api'
 import type { Route, SearchOptions, SSEEvent } from '../types'
 
 export interface UseSearchReturn {
@@ -66,7 +72,7 @@ export function useSearch(): UseSearchReturn {
 
     async function run() {
       try {
-        const response = await fetch('/search', {
+        const response = await fetch(searchUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(buildSearchBody(options)),

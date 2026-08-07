@@ -1,7 +1,72 @@
 # Famous US Descents — research for Hillbomb Collections
 
 **34 roads across 12 metro areas.** All OSM names, `highway` tags and bboxes verified against live
-Overpass. Last updated 2026-07-16.
+Overpass. Last updated 2026-07-16. Dirt descents are in the companion
+[dirt-descents.md](dirt-descents.md).
+
+> This file and its dirt companion cover the **original 94 spots**. The August 2026 pass
+> that took the collection to 272 is written up separately in
+> [expansion-2026-08.md](expansion-2026-08.md) — read that one for the OSM-name traps,
+> the region-bbox limits, and the current state of the `ref`-only backlog item described
+> below, which it confirms is still the biggest structural gap.
+
+---
+
+## Promotion status (2026-08-06)
+
+Every entry below is now either in `backend/spots.py` or listed here with a reason. Two were
+promoted out of the **Rejected** table after the constraint that blocked them changed or the
+research question was answered:
+
+| Entry | Outcome |
+|---|---|
+| **Mount Hamilton Road** | **Promoted.** Rejected only for spanning 0.19° of longitude against a per-axis 0.1° bbox cap. That guard is now area-based (`test_spots.test_bbox_is_tight`), and this road is a long thin corridor covering 0.0103°² — half the budget. It builds the longest route in the collection: 28.5 km, 1,652 m of descent. |
+| **Council Crest** | **Promoted, re-scoped.** The name/reality mismatch called out below is real, and the fix was the one this table proposed: drop `Southwest Council Crest Drive` (the near-flat summit loop) and use `Southwest Greenway Avenue` / `Southwest Talbot Road` / `Southwest Fairmount Boulevard`. Builds a 1.67 km descent with 99 m of drop, against 36 m for the loop road. `confidence="low"` until someone who rides it confirms the line. |
+
+Two are excluded for the same reason, which is worth stating as a rule: **a famous climb is not
+automatically a hill bomb.** Hillbomb only traverses edges in their legal direction, so a road that
+is one-way uphill, or closed to bicycles downhill, correctly yields nothing.
+
+| Entry | Why it is not a spot |
+|---|---|
+| **Mount Washington Auto Road** | Descending by bicycle is **strictly prohibited** — racers are driven down. OSM agrees: `bicycle=no` on 8 of 17 ways. Verified and documented below, deliberately not shipped. |
+| **Canton Avenue** | Its three steep ways are all **`oneway=yes` uphill** (`incline=34%`), so there is no legal descent. Attempting it shipped a 0 m / 0 km/h card built from the flat block at the top — the pipeline refusing correctly, not failing. |
+
+### Two pipeline gaps this research keeps running into
+
+**1. Hillbomb matches on `name`, but many state-route roads carry only `ref`.**
+This is now the single most common reason a verified-famous descent cannot ship. All of
+these exist in OSM, are rideable, and are unreachable because `osm_way_names` has nothing
+to match:
+
+| Descent | Tagged | Missing |
+|---|---|---|
+| Mount Mitchell, NC — highest peak east of the Mississippi | `ref=NC 128` | no `name` at all |
+| Brasstown Bald, GA — Georgia's high point | `ref=GA 180 Spur` | no `name` at all |
+| Mount Magazine, AR — Arkansas's high point | `ref=AR 309` | no `name` at all |
+| Hyde Park Road upper half, NM — the ski-basin climb | `ref=NM 475` | no `name` on the top 9.8 km |
+
+Three US state high points, lost to a tag we do not read. Letting a spot match on `ref`
+as well as `name` — a small change in `build_collections._matches_spot` and
+`pathfinding.build_route_from_data`, which would need to carry `ref` onto the edge the
+way `way_name` already is — would unlock all four. This is the highest-value unblock in
+the backlog.
+
+**2. The pipeline reads no `bicycle=*` tag anywhere.** `grep -rn bicycle backend/*.py`
+returns nothing outside `spots.py`. Mount Washington (`bicycle=no` on 8 of 17 ways) and
+Pilot Rock Trail (`bicycle=no` on a 644 m segment *between* two `bicycle=yes` segments)
+were both caught by research judgement, not by the code — nothing stops the pathfinder
+routing down a way bikes are barred from. For an app whose whole output is "go ride down
+this", that gap is worth closing: `access`/`bicycle` belong in `mark_traversable`
+alongside surface and rank.
+
+### A tag worth reading later
+
+Canton Avenue carries **`incline=34%`** in OSM, against the 3.5% our 10 m DEM measures. Several
+shipped spots have the same problem (Filbert, Baxter, Eldred, Bradford, Fargo, Rialto), and the
+"What is estimated" section below treats it as an unavoidable limitation. It may not be: where OSM
+carries an explicit `incline`, it is a better source for short steep streets than any DEM we can
+sample. Not implemented — recorded because the fix is cheaper than the workaround.
 
 ---
 
@@ -63,8 +128,8 @@ default rideable set:
 | Candidate | Why rejected |
 |---|---|
 | **Lombard Street (crooked block), SF** | The famous block is one-way downhill at ~27% but is 8 hairpins over 180 m with a 5 mph limit, speed bumps, and constant tourist foot traffic. It is a landmark, not a rideable descent. OSM `Lombard Street` also spans `trunk` (US‑101) for most of its length, so a name match pulls in a highway. |
-| **Mount Hamilton Road, San Jose** | Verified in OSM (`highway=secondary`, 32.9 km, `Mount Hamilton Road`), but its bbox spans **0.20° of longitude** — double the 0.1° budget. Cannot be represented as one tight box; would need splitting into 2–3 sub-climbs. Deferred rather than shipped loose. |
-| **Council Crest, Portland** | ⚠️ **Name/reality mismatch.** `Southwest Council Crest Drive` exists in OSM (`residential`+`tertiary`, 38 ways) but measures only **36 m of relief over 2.2 km (1.7% avg)** — it is just the *summit loop road*. The actual famous climb to Council Crest is ridden on `SW Greenway Avenue` / `SW Talbot Road` / `SW Fairmount Boulevard`, which are different OSM ways. Including "Council Crest Drive" would give users a flat loop. Needs re-scoping to the correct way names before it can ship. |
+| ~~**Mount Hamilton Road, San Jose**~~ | ✅ **PROMOTED** — see Promotion status above. Verified in OSM (`highway=secondary`, 32.9 km), rejected here only for spanning 0.20° of longitude against the old per-axis 0.1° budget. The budget is now area-based and this fits inside it. |
+| **Council Crest, Portland** | ⚠️ **Name/reality mismatch.** `Southwest Council Crest Drive` exists in OSM (`residential`+`tertiary`, 38 ways) but measures only **36 m of relief over 2.2 km (1.7% avg)** — it is just the *summit loop road*. The actual famous climb to Council Crest is ridden on `SW Greenway Avenue` / `SW Talbot Road` / `SW Fairmount Boulevard`, which are different OSM ways. Including "Council Crest Drive" would give users a flat loop. Needs re-scoping to the correct way names before it can ship. ✅ **PROMOTED** with exactly that re-scoping — see Promotion status above. |
 | **Mount Tabor, Portland** | Not probed. The famous skate runs are on interior Mt Tabor Park roads whose OSM names I did not verify, and much of the park is closed to cars/has seasonal restrictions. Rather than guess a name, deferred. |
 | **Signal Hill, Long Beach** | Not probed — I could not confidently identify which OSM-named street the historic speed runs used. Deferred rather than guessed. |
 | **22nd Street, SF** | Tied with Filbert at a surveyed 31.5%, but `22nd Street` is an extremely common OSM name and the steep block is short; the Filbert entry already covers this exact "steepest in SF" claim. Skipped as redundant. |

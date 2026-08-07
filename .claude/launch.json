@@ -7,6 +7,20 @@
       "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--port", "5174", "--strictPort"],
       "port": 5174,
       "autoPort": false
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "backend/.venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--reload", "--port", "8000"],
+      "port": 8000,
+      "autoPort": false
+    },
+    {
+      "name": "static-dist",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "5175", "--directory", "frontend/dist"],
+      "port": 5175,
+      "autoPort": false
     }
   ]
 }

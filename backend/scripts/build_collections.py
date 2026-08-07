@@ -9,6 +9,7 @@ to `backend/data/collections.json`, which `GET /collections` serves verbatim.
     python -m backend.scripts.build_collections --city "San Francisco Bay Area"
     python -m backend.scripts.build_collections --dry-run                  # list, don't build
     python -m backend.scripts.build_collections --clean                    # discard old output first
+    python -m backend.scripts.build_collections --metadata-only            # copy edits, no pipeline
 
 This is deliberately the same pipeline as `POST /search` (see backend/pipeline.py) —
 not a reimplementation — so curated routes and searched routes are identical in shape.
@@ -32,7 +33,7 @@ from pathlib import Path
 from ..config import DEFAULT_ROAD_TYPES, RIDER_PROFILES, SearchConfig
 from ..elevation import ElevationService
 from ..graph import build_graph
-from ..overpass import fetch_osm_data
+from ..osmsource import fetch_osm_data
 from ..pathfinding import find_routes
 from ..pipeline import RouteFinalizer, mark_traversable, route_payload, traversable_node_ids
 from ..spots import SPOTS, Spot, by_city, by_slug
@@ -47,10 +48,53 @@ class SpotBuildError(Exception):
     """A spot produced no usable routes — almost always bad osm_way_names or bbox."""
 
 
+# A supporting route has to be a real descent to earn a slot, in absolute terms and
+# relative to the spot's headline route. Without a floor, `max_routes` acts as a quota
+# rather than a cap: whatever ranks fourth gets shipped, and on a one-road spot that is
+# a leftover stub. Bradford Street was shipping an 80 m fragment that drops 0 m, and
+# Stunt Road a 24 m connector graded F, purely to reach four.
+MIN_DESCENT_M = 10.0
+MIN_DESCENT_FRACTION_OF_BEST = 0.25
+
+
+# A spot entry mixes two kinds of field: presentation copied straight from SPOTS, and
+# pipeline output. Splitting them is what lets `--metadata-only` fix a typo without a
+# network rebuild — and what stops it from lying, since re-stamping `bbox` or
+# `rider_profile` would describe the entry as something its routes were not built from.
+PRESENTATION_FIELDS = ("name", "city", "state", "blurb", "disciplines", "notes", "confidence")
+PIPELINE_INPUT_FIELDS = ("bbox", "rider_profile")
+
+
+def _presentation(spot: Spot) -> dict:
+    """The fields `--metadata-only` may safely overwrite on an existing entry.
+
+    Tuple fields are normalized to lists because that is what they become once written
+    to JSON and read back. Without it `--metadata-only` compares a tuple against the
+    list it wrote last time, calls every spot changed, and reports a no-op run as work.
+    """
+    return {
+        f: list(v) if isinstance(v, tuple) else v
+        for f in PRESENTATION_FIELDS
+        for v in (getattr(spot, f),)
+    }
+
+
 def _matches_spot(route_name: str, spot: Spot) -> bool:
     """Case-insensitive substring match of a route's name against the spot's OSM names."""
     lowered = route_name.lower()
     return any(name.lower() in lowered for name in spot.osm_way_names)
+
+
+def _keep_best(matched: list, max_routes: int) -> list:
+    """Take up to `max_routes` from a descent-sorted list, dropping token routes.
+
+    The best route is always kept — it's the spot's headline, and "no routes" is
+    already a build failure, so there is no case where dropping it is the right
+    answer. Everything after it must clear both floors.
+    """
+    best = matched[0]
+    floor = max(MIN_DESCENT_M, best.total_descent_m * MIN_DESCENT_FRACTION_OF_BEST)
+    return [best] + [r for r in matched[1:max_routes] if r.total_descent_m >= floor]
 
 
 def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
@@ -63,7 +107,7 @@ def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
 
     nodes, ways = fetch_osm_data(spot.bbox)
     if not ways:
-        raise SpotBuildError(f"Overpass returned no ways in bbox {spot.bbox}")
+        raise SpotBuildError(f"No ways returned in bbox {spot.bbox}")
 
     mark_traversable(
         ways,
@@ -112,7 +156,9 @@ def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
 
     G = build_graph(nodes, ways, config)
 
-    finalizer = RouteFinalizer(G, nodes, config, params)
+    # split_on_stall=False: a curated spot is one named descent, so a momentary stall on
+    # a riser mid-road is part of it, not the end of it. See RouteFinalizer.
+    finalizer = RouteFinalizer(G, nodes, config, params, split_on_stall=False)
     matched = [
         route
         for raw in find_routes(G, nodes, config, params, spot.toggles)
@@ -129,7 +175,7 @@ def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
 
     # Best-first: a famous descent is defined by its drop, with length breaking ties.
     matched.sort(key=lambda r: (-r.total_descent_m, -r.length_m))
-    kept = matched[:spot.max_routes]
+    kept = _keep_best(matched, spot.max_routes)
 
     elapsed = time.perf_counter() - t0
     # flush: a cold build takes minutes and is usually piped to a log, where Python's
@@ -144,13 +190,7 @@ def build_spot(spot: Spot, elev_svc: ElevationService) -> dict:
     south, west, north, east = spot.bbox
     return {
         "slug": spot.slug,
-        "name": spot.name,
-        "city": spot.city,
-        "state": spot.state,
-        "blurb": spot.blurb,
-        "discipline": spot.discipline,
-        "notes": spot.notes,
-        "confidence": spot.confidence,
+        **_presentation(spot),
         "bbox": list(spot.bbox),
         # Where the map should fly to when the spot is opened.
         "center": [(west + east) / 2, (south + north) / 2],
@@ -201,11 +241,55 @@ def write_output(entries: dict[str, dict]) -> None:
     OUT_PATH.write_text(json.dumps(doc, indent=2) + "\n")
 
 
+def refresh_metadata(spots: list[Spot], entries: dict[str, dict]) -> list[str]:
+    """Re-stamp presentation fields from SPOTS onto already-built entries.
+
+    Copy edits are the common case for touching this file — a blurb rewrite changes no
+    geometry, but the text is baked into the JSON at build time, so without this the
+    only way to publish it is a full pipeline run. Routes and `built_at` are left
+    exactly as they were.
+
+    Returns the slugs that had no entry to refresh (they need a real build first).
+    """
+    unbuilt: list[str] = []
+    for spot in spots:
+        entry = entries.get(spot.slug)
+        if entry is None:
+            unbuilt.append(spot.slug)
+            continue
+
+        # A changed bbox or rider profile means the committed routes came from a
+        # different question than the one SPOTS now asks. Refreshing the text around
+        # them is still correct; silently leaving the mismatch unmentioned is not.
+        for f in PIPELINE_INPUT_FIELDS:
+            current, stored = getattr(spot, f), entry.get(f)
+            if f == "bbox":
+                current = list(current)
+            if stored != current:
+                print(
+                    f"    warning: {spot.slug}.{f} changed since the routes were built "
+                    f"({stored!r} → {current!r}); re-run without --metadata-only",
+                    file=sys.stderr,
+                )
+
+        changed = [f for f, v in _presentation(spot).items() if entry.get(f) != v]
+        if changed:
+            entry.update(_presentation(spot))
+            print(f"  {spot.slug}: {', '.join(changed)}")
+    return unbuilt
+
+
 def _report_output(entries: dict[str, dict]) -> None:
     where = OUT_PATH.relative_to(Path.cwd()) if OUT_PATH.is_relative_to(Path.cwd()) else OUT_PATH
-    n_routes = sum(len(e["routes"]) for e in entries.values())
-    n_cities = len({s.city for s in SPOTS if s.slug in entries})
-    print(f"\nWrote {where} — {len(entries)} spot(s), {n_cities} cit(ies), {n_routes} route(s)")
+    # Count what write_output actually wrote, not what's in `entries`. Those differ
+    # whenever a spot has been deleted from SPOTS: its stale entry is still loaded from
+    # the old JSON and still sitting in `entries`, but write_output rebuilds the file
+    # from SPOTS and drops it. Counting `entries` reported one more spot than the file
+    # on disk contained, which is exactly the sort of thing you check this line for.
+    written = {s.slug for s in SPOTS if s.slug in entries}
+    n_routes = sum(len(entries[slug]["routes"]) for slug in written)
+    n_cities = len({s.city for s in SPOTS if s.slug in written})
+    print(f"\nWrote {where} — {len(written)} spot(s), {n_cities} cit(ies), {n_routes} route(s)")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -238,9 +322,31 @@ def main() -> int:
                         help="discard existing output instead of merging into it")
     parser.add_argument("--dry-run", action="store_true",
                         help="list the spots that would be built, then exit")
+    parser.add_argument("--metadata-only", action="store_true",
+                        help="re-stamp names/blurbs/notes from spots.py onto the existing "
+                             "output without re-running the pipeline (no network)")
     args = parser.parse_args()
 
+    if args.metadata_only and args.clean:
+        raise SystemExit("--metadata-only refreshes existing entries; --clean deletes them.")
+
     spots = select_spots(args)
+
+    if args.metadata_only:
+        entries = load_existing()
+        if not entries:
+            raise SystemExit(f"{OUT_PATH} has no built spots to refresh. Run a real build first.")
+        unbuilt = refresh_metadata(spots, entries)
+        write_output(entries)
+        _report_output(entries)
+        if unbuilt:
+            print(
+                f"\n{len(unbuilt)} selected spot(s) have never been built, so there was "
+                f"nothing to refresh: {', '.join(unbuilt)}",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
     if args.dry_run:
         print(f"Would build {len(spots)} spot(s):")

@@ -6,7 +6,8 @@ Node categories added as graph attributes:
   - peak: local elevation maximum within peak_search_radius_m
   - valley: local elevation minimum within peak_search_radius_m
 
-Edges carry: distance_m, grade (rise/run, signed), highway, surface, is_bridge, is_tunnel.
+Edges carry: distance_m, grade (rise/run, signed), highway, surface, is_bridge,
+is_tunnel, trail_difficulty.
 """
 
 import math
@@ -24,11 +25,58 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-def _segment_grade(n1: OSMNode, n2: OSMNode) -> float:
+def _segment_grade(n1: OSMNode, n2: OSMNode, elev1: float, elev2: float) -> float:
     dist = _haversine_m(n1.lat, n1.lon, n2.lat, n2.lon)
     if dist < 0.1:
         return 0.0
-    return (n2.elevation - n1.elevation) / dist
+    return (elev2 - elev1) / dist
+
+
+def _deck_elevations(
+    nodes_by_id: dict[int, OSMNode],
+    ways: list[OSMWay],
+    max_span_m: float,
+) -> dict[int, float]:
+    """Elevation overrides for nodes in the *interior* of a bridge or tunnel way.
+
+    A DEM samples the ground, not the structure: intermediate nodes on a bridge come
+    back with the elevation of the creek bed underneath, and tunnel nodes with the
+    hillside above. Left alone that reads as a sharp dip (or climb) followed by a
+    recovery — fake grade that pathfinding chases and the profile chart shows.
+
+    A deck runs level-to-sloping between its ends, so interior nodes are replaced
+    with a linear ramp from one end elevation to the other, distributed by distance
+    along the way. The endpoints keep their measured elevation; they sit on real
+    ground. Note this flattens genuine terrain on the (common, TIGER-era) ways that
+    are tagged `bridge=yes` over hundreds of metres of ordinary road — the net drop
+    and the geometry stay right, only the undulation between the ends is lost.
+
+    Ways longer than max_span_m are skipped: they're dropped from the graph entirely
+    (see build_graph), and their nodes may still belong to other ways.
+    """
+    overrides: dict[int, float] = {}
+    for way in ways:
+        if not (way.is_bridge or way.is_tunnel):
+            continue
+        nids = [nid for nid in way.node_ids if nid in nodes_by_id]
+        if len(nids) < 3:
+            continue  # no interior nodes to correct
+        pts = [nodes_by_id[nid] for nid in nids]
+        start, end = pts[0], pts[-1]
+        if _haversine_m(start.lat, start.lon, end.lat, end.lon) > max_span_m:
+            continue
+
+        cumulative = [0.0]
+        for a, b in zip(pts, pts[1:]):
+            cumulative.append(cumulative[-1] + _haversine_m(a.lat, a.lon, b.lat, b.lon))
+        total = cumulative[-1]
+        if total <= 0:
+            continue
+
+        rise = end.elevation - start.elevation
+        for nid, along in zip(nids[1:-1], cumulative[1:-1]):
+            overrides[nid] = start.elevation + rise * (along / total)
+    return overrides
 
 
 # Projected node tuple: (node_id, x_m, y_m, lat, lon, elevation)
@@ -81,6 +129,13 @@ def build_graph(
 ) -> nx.DiGraph:
     G = nx.DiGraph()
 
+    # Bridge/tunnel interiors read the ground under/over the structure, not the deck.
+    # The graph — and every route built from it — uses these corrected values instead.
+    deck_elev = _deck_elevations(nodes_by_id, ways, config.max_bridge_span_m)
+
+    def elevation_of(nid: int) -> float:
+        return deck_elev.get(nid, nodes_by_id[nid].elevation)
+
     # ── 1. Add all way-referenced nodes ──────────────────────────────────────
     way_node_ids: set[int] = set()
     for way in ways:
@@ -91,7 +146,7 @@ def build_graph(
             continue
         n = nodes_by_id[nid]
         G.add_node(nid,
-            lat=n.lat, lon=n.lon, elevation=n.elevation,
+            lat=n.lat, lon=n.lon, elevation=elevation_of(nid),
             is_traffic_signal=n.is_traffic_signal,
             is_stop_sign=n.is_stop_sign,
             is_peak=False, is_valley=False, is_intersection=False,
@@ -110,28 +165,30 @@ def build_graph(
             span = _haversine_m(n0.lat, n0.lon, n1.lat, n1.lon)
             if span > config.max_bridge_span_m:
                 continue  # too long (e.g. Golden Gate = 2.7 km); not hill bomb terrain
-            # Straight-line segment: only start→end (and reverse if two-way)
-            pairs = [(nids[0], nids[-1])]
-            if not way.oneway and not way.oneway_reverse:
-                pairs.append((nids[-1], nids[0]))
-        else:
-            # Full sequence of node pairs
-            pairs = []
-            for i in range(len(nids) - 1):
-                a, b = nids[i], nids[i + 1]
-                if way.oneway_reverse:
-                    pairs.append((b, a))
-                elif way.oneway:
-                    pairs.append((a, b))
-                else:
-                    pairs.append((a, b))
-                    pairs.append((b, a))
+            # A short-enough deck is edged like any other way, over its real node
+            # sequence. Collapsing it to a start→end chord instead used to drop every
+            # shape point in between, which drew a straight line across the corner the
+            # road actually turns — a visible jump on the map and in exported GPX, and
+            # a route length short by however much the road curved. What a deck does
+            # need is corrected elevation, and _deck_elevations has already supplied it.
+
+        # Full sequence of node pairs
+        pairs = []
+        for i in range(len(nids) - 1):
+            a, b = nids[i], nids[i + 1]
+            if way.oneway_reverse:
+                pairs.append((b, a))
+            elif way.oneway:
+                pairs.append((a, b))
+            else:
+                pairs.append((a, b))
+                pairs.append((b, a))
 
         for src, dst in pairs:
             n_src = nodes_by_id[src]
             n_dst = nodes_by_id[dst]
             dist = _haversine_m(n_src.lat, n_src.lon, n_dst.lat, n_dst.lon)
-            grade = _segment_grade(n_src, n_dst)
+            grade = _segment_grade(n_src, n_dst, elevation_of(src), elevation_of(dst))
             # Very short segments (< 15m) between dense shape points can produce
             # extreme apparent grades from ~1m elevation raster noise.  Cap at a
             # realistic road maximum so noise spikes don't kill pathfinding.
@@ -145,6 +202,7 @@ def build_graph(
                 is_bridge=way.is_bridge,
                 is_tunnel=way.is_tunnel,
                 way_name=way.name,
+                trail_difficulty=way.trail_difficulty,
                 traversable=way.traversable,
             )
 
@@ -174,7 +232,7 @@ def build_graph(
 
     # Project once; reuse for both the primary and the wider ridge-top pass.
     proj = _project_nodes(
-        [(nid, n.lat, n.lon, n.elevation)
+        [(nid, n.lat, n.lon, elevation_of(nid))
          for nid in G.nodes if nid in elevated_ids and (n := nodes_by_id.get(nid)) is not None]
     )
     elev_by_id = {nid: elev for nid, _x, _y, _lat, _lon, elev in proj}

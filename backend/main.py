@@ -38,13 +38,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from .config import DEFAULT_ROAD_TYPES, RIDER_PROFILES, SearchConfig, Toggles
+from .config import (
+    DEFAULT_ROAD_TYPES,
+    MAX_TRAIL_DIFFICULTY,
+    RIDER_PROFILES,
+    SearchConfig,
+    Toggles,
+)
 from .elevation import ElevationService, SearchCancelled
 from .gate import RequestGate
 from .graph import build_graph
-from .overpass import fetch_osm_data
+from .osmsource import describe_source, fetch_osm_data
 from .pathfinding import find_routes
-from .pipeline import RouteFinalizer, mark_traversable, route_payload, traversable_node_ids
+from .pipeline import (
+    RouteFinalizer,
+    collections_index,
+    mark_traversable,
+    route_payload,
+    traversable_node_ids,
+)
 
 
 @asynccontextmanager
@@ -63,9 +75,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Hillbomb API", lifespan=lifespan)
 
+# In production the SPA and the collections JSON are served from a CDN, on a different
+# origin than this API, so POST /search is the one cross-origin request the app makes
+# and it needs CORS to work at all (a JSON body makes it non-simple, so it costs a
+# preflight OPTIONS — hence OPTIONS below). Set HILLBOMB_ALLOWED_ORIGINS to the site's
+# real origin there; see docs/deploy.md.
+#
+# The "*" default is for every other environment — dev, tests, `docker run` — where the
+# app and the API share an origin and CORS never comes into play. Note we send no
+# credentials, so "*" is a legal value; adding cookies or auth later would make it
+# illegal and force an explicit list.
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("HILLBOMB_ALLOWED_ORIGINS", "*").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -92,7 +120,21 @@ class SearchRequest(BaseModel):
     max_routes: int = 500
     max_road_rank: int = 6                   # cap by HIGHWAY_RANK; 6 = secondary (UI slider default), 9 = all roads
     allowed_surface_categories: list[str] | None = None  # None = all surfaces allowed
+    # Cap on 0-6 mtb:scale; None = any. Untagged ways are always allowed, so this
+    # narrows a trail search rather than guaranteeing a road one stays off singletrack.
+    # See pipeline.mark_traversable.
+    max_trail_difficulty: int | None = None
     crr_pathfinding: float | None = None     # overrides profile default when set
+
+    @field_validator("max_trail_difficulty")
+    @classmethod
+    def difficulty_in_range(cls, v: int | None) -> int | None:
+        # Out-of-range values fail silently rather than loudly: 7 would allow
+        # everything and -1 would exclude every graded way while still returning
+        # untagged ones, which looks like the filter doing nothing.
+        if v is not None and not (0 <= v <= MAX_TRAIL_DIFFICULTY):
+            raise ValueError(f"max_trail_difficulty must be 0..{MAX_TRAIL_DIFFICULTY}")
+        return v
 
     @field_validator("bbox")
     @classmethod
@@ -109,6 +151,32 @@ class SearchRequest(BaseModel):
 
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+async def _messages_until_done(q: "asyncio.Queue[str]", fut: asyncio.Future):
+    """Yield messages pushed onto `q` while `fut` is still running.
+
+    Used to surface progress from a blocking executor stage. Without this the
+    generator sits on a single `await run_in_executor(...)` and can emit nothing
+    until the stage finishes — which for an Overpass outage means up to ~35 s of
+    silent spinner while the retries back off.
+    """
+    while True:
+        getter = asyncio.ensure_future(q.get())
+        done, _ = await asyncio.wait({getter, fut}, return_when=asyncio.FIRST_COMPLETED)
+        if getter in done:
+            yield getter.result()
+            continue
+        # The stage finished. Cancel the pending get and flush anything that
+        # landed between the last wait and now, so no message is dropped.
+        getter.cancel()
+        # A producer thread reaches this queue via call_soon_threadsafe, so a
+        # message scheduled just before the stage returned may not have run yet.
+        # Yield once to let those callbacks land before deciding the queue is dry.
+        await asyncio.sleep(0)
+        while not q.empty():
+            yield q.get_nowait()
+        return
 
 
 def _route_event(route) -> str:
@@ -160,14 +228,39 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
 
     producer: asyncio.Future | None = None
     try:
-        yield _sse({"type": "status", "message": "Querying Overpass API..."})
+        # Name the source the request will actually use. Local GOL, warm Overpass
+        # cache and cold Overpass query differ by three orders of magnitude in
+        # latency; showing one message for all three makes the fast paths look
+        # broken and the slow path look hung.
+        osm_source, osm_message = describe_source(req.bbox)
+        yield _sse({"type": "status", "message": osm_message})
         t0 = time.perf_counter()
-        nodes, ways = await loop.run_in_executor(
-            None, fetch_osm_data, req.bbox
+
+        # Overpass sheds load with 429/504 and can be flat-out down. The retry
+        # backoff is up to ~35 s, so tell the user why they're waiting rather
+        # than showing an unexplained stall. Emitted as `status` events, which
+        # the frontend already renders — no new SSE type.
+        retry_msgs: asyncio.Queue[str] = asyncio.Queue()
+
+        def _on_overpass_retry(reason: str, attempt: int, attempts: int, delay: float) -> None:
+            # Runs on the executor thread; asyncio.Queue is not thread-safe, so
+            # hop to the loop thread before touching it.
+            loop.call_soon_threadsafe(
+                retry_msgs.put_nowait,
+                f"OpenStreetMap data server failed ({reason}) — retrying in "
+                f"{delay:.0f}s (attempt {attempt} of {attempts})...",
+            )
+
+        osm_fut = loop.run_in_executor(
+            None, lambda: fetch_osm_data(req.bbox, on_retry=_on_overpass_retry)
         )
-        timings["overpass"] = time.perf_counter() - t0
-        log.info("stage overpass: %.0f ms (%d nodes, %d ways)",
-                 timings["overpass"] * 1000, len(nodes), len(ways))
+        async for msg in _messages_until_done(retry_msgs, osm_fut):
+            yield _sse({"type": "status", "message": msg})
+        nodes, ways = await osm_fut
+
+        timings["osm"] = time.perf_counter() - t0
+        log.info("stage osm (%s): %.0f ms (%d nodes, %d ways)",
+                 osm_source, timings["osm"] * 1000, len(nodes), len(ways))
         if await is_done():
             return
 
@@ -183,6 +276,7 @@ async def _pipeline(req: SearchRequest, elevation_svc: ElevationService, gate: R
                 if req.allowed_surface_categories is not None
                 else None
             ),
+            max_trail_difficulty=req.max_trail_difficulty,
         )
 
         used_ids = {nid for w in ways for nid in w.node_ids}
@@ -361,46 +455,25 @@ def _load_collections() -> dict:
     return doc
 
 
-def _spot_summary(entry: dict) -> dict:
-    """Index-card view of a spot: metadata plus headline stats, minus all geometry."""
-    routes = entry.get("routes", [])
-    best = routes[0] if routes else None
-    return {
-        "slug": entry["slug"],
-        "name": entry["name"],
-        "state": entry["state"],
-        "blurb": entry["blurb"],
-        "discipline": entry["discipline"],
-        "notes": entry["notes"],
-        "center": entry["center"],
-        "bbox": entry["bbox"],
-        "route_count": len(routes),
-        # Headline stats come from the best route (the builder sorts best-first).
-        "length_m": best["metadata"]["length_m"] if best else 0,
-        "total_descent_m": best["metadata"]["total_descent_m"] if best else 0,
-        "avg_grade_pct": best["metadata"]["avg_grade_pct"] if best else 0,
-        "top_speed_kmh": best["top_speed_kmh"] if best else 0,
-        "flow_grade": best["flow_grade"] if best else "",
-    }
+# These two URLs are ".json" because in production they are not served from here at
+# all — they are flat files on the CDN, written by scripts/export_static_collections.py
+# (see docs/deploy.md). Serving the identical URLs from FastAPI means dev, `docker run`,
+# and the CDN are URL-for-URL the same, so the frontend needs no notion of which one it
+# is talking to and nothing about collections is only exercised in production.
+#
+# Declaration order matters: "/collections/index.json" must come first, or it matches
+# the slug route below and 404s as an unknown spot named "index".
 
-
-@app.get("/collections")
+@app.get("/collections/index.json")
 async def collections():
     """Index of curated spots by city — metadata and headline stats, no route geometry.
 
-    Deliberately light. Fetch /collections/{slug} for a spot's actual routes.
+    Deliberately light. Fetch /collections/{slug}.json for a spot's actual routes.
     """
-    doc = _load_collections()
-    return {
-        "version": doc.get("version", 1),
-        "cities": [
-            {"city": c["city"], "spots": [_spot_summary(s) for s in c.get("spots", [])]}
-            for c in doc.get("cities", [])
-        ],
-    }
+    return collections_index(_load_collections())
 
 
-@app.get("/collections/{slug}")
+@app.get("/collections/{slug}.json")
 async def collection_spot(slug: str):
     """One curated spot, with its full routes."""
     doc = _load_collections()
@@ -428,3 +501,75 @@ async def search(req: SearchRequest, request: Request):
             "Connection": "keep-alive",
         },
     )
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/healthz")
+@app.get("/api/healthz")
+async def healthz():
+    """Liveness probe. Deliberately does no I/O — it must not depend on Overpass,
+    S3 or the collections file, or a healthy container looks unhealthy whenever an
+    upstream is having a bad day.
+
+    Registered at BOTH paths on purpose. `/healthz` is the conventional name and is
+    what the container's own HEALTHCHECK hits over localhost. But on Cloud Run that
+    exact path never reaches the container: Google's frontend answers `/healthz`
+    itself with its own branded 404 page. (Verified against the deployed service —
+    `/healthz` returns a Google error page while `/healthz/`, `/health` and every
+    other spelling reach the app.) So anything probing from OUTSIDE — uptime checks,
+    load balancers, curl — has to use `/api/healthz`.
+    """
+    return {"status": "ok"}
+
+
+# ── Static frontend ───────────────────────────────────────────────────────────
+#
+# In production the built SPA is served by this same app, from this same origin.
+# That is deliberate: the frontend fetches "/search" and "/collections" as RELATIVE
+# paths (see hooks/useSearch.ts, hooks/useCollections.ts), so one origin means no
+# CORS preflight on the SSE POST and no build-time API base URL to configure per
+# environment. Split them and both of those problems arrive at once.
+#
+# Registered LAST so every API route above wins the match. In development this
+# directory does not exist and the whole block is skipped — Vite serves the
+# frontend and proxies the API (see frontend/vite.config.ts).
+
+_STATIC_DIR = Path(
+    os.environ.get("HILLBOMB_STATIC_DIR", str(Path(__file__).resolve().parents[1] / "static"))
+)
+
+if _STATIC_DIR.is_dir():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    # Vite emits content-hashed filenames under /assets, so they are safe to cache
+    # hard and forever. index.html must NOT be (see below).
+    _assets = _STATIC_DIR / "assets"
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+
+    _INDEX = _STATIC_DIR / "index.html"
+
+    @app.get("/{full_path:path}")
+    async def spa(full_path: str):
+        """Serve real files, and fall back to index.html for client-side routes.
+
+        The fallback is what makes a deep link work: the SPA owns its routing, so
+        any path that isn't a file on disk has to return the app shell rather than
+        a 404 and let the client resolve it.
+
+        index.html is served no-store. It names the hashed asset bundles, so a
+        cached copy pointing at bundles that no longer exist is exactly how a
+        deploy turns into a blank page for anyone with a warm cache.
+        """
+        candidate = (_STATIC_DIR / full_path).resolve()
+        # Containment check: full_path is attacker-controlled, and without this a
+        # request for "../../etc/passwd" would escape the static root.
+        if candidate.is_file() and candidate.is_relative_to(_STATIC_DIR.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(_INDEX, headers={"Cache-Control": "no-store"})
+
+    log.info("serving built frontend from %s", _STATIC_DIR)
+else:
+    log.info("no static dir at %s — API only (dev mode: Vite serves the frontend)", _STATIC_DIR)

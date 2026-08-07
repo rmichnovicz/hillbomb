@@ -67,10 +67,19 @@ def build_route_from_data(
     best_grade_abs = 0.0
     route_name = ""
     surface_distances: dict[str, float] = {}
+    # Hardest graded segment, or None if nothing on the route was tagged. Untagged
+    # segments are skipped rather than read as 0 — see config.SAC_SCALE_TO_DIFFICULTY.
+    trail_difficulty: int | None = None
     for i in range(len(node_ids) - 1):
         u, v = node_ids[i], node_ids[i + 1]
         if G.has_edge(u, v):
             ed = G[u][v]
+            seg_difficulty = ed.get("trail_difficulty")
+            if seg_difficulty is not None:
+                trail_difficulty = (
+                    seg_difficulty if trail_difficulty is None
+                    else max(trail_difficulty, seg_difficulty)
+                )
             if abs(ed.get("grade", 0)) > best_grade_abs:
                 best_grade_abs = abs(ed.get("grade", 0))
                 primary_hw = ed.get("highway", "residential")
@@ -114,6 +123,7 @@ def build_route_from_data(
         total_descent_m=total_descent,
         avg_grade_pct=avg_grade,
         surface_distances=surface_distances,
+        trail_difficulty=trail_difficulty,
         stops=stops,
     )
 
@@ -135,7 +145,14 @@ def _speed_at_node(
     net_accel = g * (-grade - params.crr_pathfinding)
     # v² = u² + 2as
     v2 = prev_speed_ms ** 2 + 2 * net_accel * dist_m
-    return math.sqrt(max(v2, 0.0))
+    v = math.sqrt(max(v2, 0.0))
+    # Same ceiling the sim applies (see config.RiderParams.max_speed_kmh). It matters
+    # here too, not just for display: arrival speed is the priority-queue sort key, so
+    # without the cap a capped profile would rank its steepest lines by a speed the
+    # rider will never reach, and drag's absence here makes that runaway worse.
+    if params.max_speed_kmh is not None:
+        v = min(v, params.max_speed_kmh / 3.6)
+    return v
 
 
 # ── Path state ────────────────────────────────────────────────────────────────
@@ -209,7 +226,10 @@ def find_routes(
             return None
         node_ids = path.node_ids
         coords = [[nodes_by_id[n].lon, nodes_by_id[n].lat] for n in node_ids if n in nodes_by_id]
-        elevs  = [nodes_by_id[n].elevation for n in node_ids if n in nodes_by_id]
+        # Elevation comes from the graph, not the raw OSM node: build_graph corrects
+        # bridge/tunnel interiors, where the DEM sampled the ground under the deck.
+        # Pathfinding scored on those corrected values, so the profile must match.
+        elevs  = [G.nodes[n].get("elevation", 0.0) for n in node_ids if n in nodes_by_id]
         # Reuse the distance the graph already stored (and that pathfinding scored
         # on); fall back to haversine only if the edge is somehow missing.
         dists: list[float] = []

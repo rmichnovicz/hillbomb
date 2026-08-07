@@ -4,10 +4,12 @@ import { useCollections } from './hooks/useCollections'
 import { usePersistedState } from './hooks/usePersistedState'
 import { usePhysics } from './hooks/usePhysics'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useIpLocation } from './hooks/useIpLocation'
+import { nearestCity } from './utils/geo'
 import { HillbombMap } from './components/Map/HillbombMap'
 import { RouteList } from './components/RouteList/RouteList'
 import type { SortMode } from './components/RouteList/RouteList'
-import { CollectionsPanel } from './components/Collections/CollectionsPanel'
+import { CollectionsPanel, spotMatchesFilter } from './components/Collections/CollectionsPanel'
 import { ProfilePanel } from './components/ProfilePanel/ProfilePanel'
 import { RiderSettings } from './components/RiderSettings/RiderSettings'
 import { SearchControls, DEFAULT_ROAD_SIZE_STEP, ROAD_SIZE_STEPS } from './components/SearchControls/SearchControls'
@@ -66,6 +68,7 @@ const DEFAULT_MIN_DISTANCE_M = 500
 export default function App() {
   const { isSearching, routes, statusMessage, error, startSearch, stopSearch } = useSearch()
   const collections = useCollections()
+  const ipLocation = useIpLocation()
 
   const [tab, setTab] = useState<Tab>('search')
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
@@ -94,13 +97,56 @@ export default function App() {
     [routes, minDistanceM],
   )
 
+  // Selected discipline tags for the Collections tab; empty means show everything.
+  const [disciplineFilter, setDisciplineFilter] = useState<string[]>([])
+
+  // A region overview shows one line per spot — its headline route (the builder sorts
+  // best-first). The alternate lines of a spot are variations on the same descent;
+  // drawing all four of each would triple the ink for no extra information at this
+  // zoom. Open a spot to see its other lines.
+  //
+  // Filtered by discipline alongside the sidebar: a line on the map for a spot the list
+  // has hidden is unexplainable, and clicking it would open a spot you filtered out.
+  const visibleCitySpots = useMemo(
+    () => collections.citySpots.filter(s => spotMatchesFilter(s, disciplineFilter)),
+    [collections.citySpots, disciplineFilter],
+  )
+
+  const cityOverviewRoutes = useMemo(
+    () => visibleCitySpots.map(s => s.routes[0]).filter(Boolean),
+    [visibleCitySpots],
+  )
+
+  // Spot slug → its headline route id, so hovering a spot card can light up its line.
+  const spotHeadlineRouteId = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of collections.citySpots) {
+      if (s.routes[0]) map.set(s.slug, s.routes[0].route_id)
+    }
+    return map
+  }, [collections.citySpots])
+
+  // The reverse: which spot a line on the region overview belongs to, so clicking that
+  // line can open its spot. Every route is indexed, not just the headline one, so this
+  // still resolves if the overview ever draws more than one line per spot.
+  const spotSlugByRouteId = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of collections.citySpots) {
+      for (const r of s.routes) map.set(r.route_id, s.slug)
+    }
+    return map
+  }, [collections.citySpots])
+
   // Whatever the map and route list are currently showing. Collections and search are
   // separate sources of the same `Route` shape, so everything downstream of this —
   // grouping, the map, the profile panel, live physics — is identical for both.
+  // In the collections tab an open spot wins over its region: you've drilled in.
   // The min-distance filter is deliberately search-only: a curated route is curated.
   const displayedRoutes = useMemo(
-    () => tab === 'collections' ? (collections.activeSpot?.routes ?? []) : filteredRoutes,
-    [tab, collections.activeSpot, filteredRoutes],
+    () => tab === 'collections'
+      ? (collections.activeSpot?.routes ?? cityOverviewRoutes)
+      : filteredRoutes,
+    [tab, collections.activeSpot, cityOverviewRoutes, filteredRoutes],
   )
 
   // Group routes by start_node_id; sort groups by selected sort mode
@@ -193,14 +239,24 @@ export default function App() {
 
   // Destructured because the hook returns a fresh object each render — depending on
   // `collections` itself would re-run these effects/callbacks on every render. These
-  // two are stable useCallbacks.
-  const { loadIndex: loadCollectionsIndex, clearSpot: clearCollectionSpot } = collections
+  // are useCallbacks: stable except toggleCity, which re-forms when the index or the
+  // open region changes.
+  const {
+    loadIndex: loadCollectionsIndex,
+    clearSpot: clearCollectionSpot,
+    toggleCity: toggleCollectionCity,
+    selectSpot: selectCollectionSpot,
+  } = collections
 
-  // Fetch the collections index the first time the tab is opened — not on mount, so
-  // a user who never opens it never pays for it. loadIndex() dedups internally.
+  // Fetch the collections index on mount. This used to wait for the tab to be opened,
+  // so that a user who never opened it never paid for it — but the index is 18 KB
+  // brotli'd off the CDN, and waiting made it impossible to answer "is there anything
+  // curated near this visitor?" before they had already chosen a tab. 18 KB is not
+  // worth that. The per-spot geometry is still lazy, and that's where the weight is
+  // (a large region is ~100 KB). loadIndex() dedups internally.
   useEffect(() => {
-    if (tab === 'collections') loadCollectionsIndex()
-  }, [tab, loadCollectionsIndex])
+    loadCollectionsIndex()
+  }, [loadCollectionsIndex])
 
   // Opening a spot: select its best line, which makes the map's fit-bounds effect
   // fly to it. Routes are already in `displayedRoutes` by the time this runs.
@@ -215,17 +271,135 @@ export default function App() {
     setActiveGroupId(null)
     setActiveRouteId(null)
     setScrubPosition(null)
+    // Hover is cleared too: the card the pointer was over may be unmounting with
+    // this transition, and it can't send a mouseleave once it's gone.
+    setHoveredGroupId(null)
+    setHoveredRouteId(null)
   }, [])
+
+  // Bumped whenever the map should re-frame the open region: opening one, backing out
+  // of a spot into it, or returning to the tab. The map fits once per distinct key,
+  // so without the counter a re-entry to the same region wouldn't move the viewport.
+  const [regionFitToken, setRegionFitToken] = useState(0)
+  const refitRegion = useCallback(() => setRegionFitToken(t => t + 1), [])
+
+  // Non-null only while a region is the thing on screen; an open spot frames itself
+  // via the map's active-group fit.
+  const regionFitKey = tab === 'collections' && !collections.activeSpot && collections.expandedCity
+    ? `${collections.expandedCity}#${regionFitToken}`
+    : null
 
   const handleTabChange = useCallback((next: Tab) => {
     setTab(next)
     clearSelection()
-  }, [clearSelection])
+    if (next === 'collections') refitRegion()
+  }, [clearSelection, refitRegion])
+
+  const handleToggleCity = useCallback((city: string) => {
+    toggleCollectionCity(city)
+    clearSelection()
+    refitRegion()
+  }, [toggleCollectionCity, clearSelection, refitRegion])
+
+  // Open the curated region nearest the visitor, once, the first time the Collections
+  // list and the IP geolocation are both available — so someone in Denver lands on
+  // Denver instead of scrolling 34 folders past San Francisco to find it.
+  //
+  // One shot per mount, and it defers to the user in both directions: it never fires
+  // if a region is already open, and once it has fired the region is theirs to change.
+  // `nearestCity` returns null when nothing curated is within ~300 km, in which case
+  // the right move is to leave the full list collapsed rather than guess.
+  //
+  // Mobile goes further and switches to the Collections tab, because that is what puts
+  // the region's lines on the map behind the collapsed sheet — the whole payoff on a
+  // phone, where the map *is* the app. It costs the floating "Search this area" button
+  // on first load (hidden on this tab), which is the deliberate trade: a first-time
+  // visitor gets real descents on screen instead of a one-tap search of wherever the
+  // map happens to be pointing. The sheet is left collapsed either way; its label
+  // names the region, and one tap opens it.
+  const autoExpandedRef = useRef(false)
+  useEffect(() => {
+    if (autoExpandedRef.current) return
+    if (!ipLocation || collections.cities.length === 0) return
+    // Desktop waits until the tab is actually opened. Expanding a region pulls up to
+    // ~100 KB of geometry, and on desktop nothing renders it until then — so there it
+    // would be bytes spent on a tab the visitor may never open. On mobile it is drawn
+    // immediately, so it earns them.
+    if (!isMobile && tab !== 'collections') return
+
+    // Every input is in — this is the one chance to act, taken or not.
+    autoExpandedRef.current = true
+    if (collections.expandedCity) return
+
+    const city = nearestCity(collections.cities, ipLocation.lat, ipLocation.lon)
+    if (!city) return
+    handleToggleCity(city)
+    if (isMobile) setTab('collections')
+  }, [ipLocation, collections.cities, collections.expandedCity, isMobile, tab, handleToggleCity])
+
+  const handleDisciplineFilterChange = useCallback((next: string[]) => {
+    setDisciplineFilter(next)
+    clearSelection()
+    // A region whose every spot just got filtered out can't stay open: it would render
+    // an empty folder and keep the map framed on lines that are no longer drawn.
+    const open = collections.cities.find(c => c.city === collections.expandedCity)
+    if (open && !open.spots.some(s => spotMatchesFilter(s, next))) {
+      toggleCollectionCity(open.city)
+    }
+    refitRegion()
+  }, [collections.cities, collections.expandedCity, toggleCollectionCity, clearSelection, refitRegion])
+
+  const handleHoverSpot = useCallback((slug: string | null) => {
+    setHoveredRouteId(slug ? spotHeadlineRouteId.get(slug) ?? null : null)
+  }, [spotHeadlineRouteId])
+
+  // Opening a spot unmounts the card that was hovered, so drop the highlight here
+  // rather than wait for a mouseleave that will never come.
+  const handleSelectSpot = useCallback((slug: string) => {
+    setHoveredRouteId(null)
+    selectCollectionSpot(slug)
+  }, [selectCollectionSpot])
+
+  // Toggling the mobile sheet changes how much of the map is covered, and the fit that
+  // framed the open region ran against the old figure — so re-fit, or opening the sheet
+  // slides the region behind it. Only while a region is what's on screen; an open spot
+  // and a search both frame themselves elsewhere.
+  const handleToggleMobilePanel = useCallback(() => {
+    setMobilePanelOpen(open => !open)
+    if (tab === 'collections' && !collections.activeSpot && collections.expandedCity) {
+      refitRegion()
+    }
+  }, [tab, collections.activeSpot, collections.expandedCity, refitRegion])
+
+  /**
+   * How much of the map the bottom sheet hides, as a fraction of its height.
+   *
+   * Only the open sheet counts: collapsed it is 52px, which already fits inside the
+   * fits' own 60px base padding.
+   */
+  const mobileFitInset = isMobile && mobilePanelOpen ? 0.65 : 0
+
+  /**
+   * What the collapsed mobile sheet says about Collections.
+   *
+   * This is the whole mobile payoff of the nearest-region guess. The sheet is left
+   * closed so the map — which on a phone is the app — keeps the screen, and this line
+   * does the inviting instead: it names the region whose lines are already drawn
+   * behind it, which a generic "tap to browse" cannot. With no region open (guess
+   * missed, or nothing curated within range) it falls back to the generic prompt, and
+   * mobile behaves exactly as it did before any of this.
+   */
+  const collectionsSummary = useMemo(() => {
+    const count = visibleCitySpots.length
+    if (!collections.expandedCity || count === 0) return 'Tap to browse collections'
+    return `${count} descent${count === 1 ? '' : 's'} in ${collections.expandedCity} — tap to view`
+  }, [collections.expandedCity, visibleCitySpots.length])
 
   const handleBackToCollections = useCallback(() => {
     clearCollectionSpot()
     clearSelection()
-  }, [clearCollectionSpot, clearSelection])
+    refitRegion()
+  }, [clearCollectionSpot, clearSelection, refitRegion])
 
   const handleSearch = useCallback(() => {
     const [, maxRoadRank] = ROAD_SIZE_STEPS[roadSizeStep]
@@ -260,7 +434,17 @@ export default function App() {
     setActiveGroupId(startNodeId)
     setActiveRouteId(routeId)
     setScrubPosition(null)
-  }, [])
+    // While browsing a region the sidebar is showing spot cards, not routes, so a click
+    // on the map would otherwise select a line the sidebar can't show. Follow it in:
+    // open the spot that line belongs to, and its now-flat list highlights the route.
+    if (tab === 'collections' && !collections.activeSpot) {
+      const slug = spotSlugByRouteId.get(routeId)
+      if (slug) {
+        setHoveredRouteId(null)
+        selectCollectionSpot(slug)
+      }
+    }
+  }, [tab, collections.activeSpot, spotSlugByRouteId, selectCollectionSpot])
 
   if (isMobile) {
     return (
@@ -278,6 +462,8 @@ export default function App() {
             onSelectGroup={handleSelectGroup}
             onSelectPath={handleSelectPath}
             scrubPosition={scrubPosition}
+            fitAllKey={regionFitKey}
+            fitBottomInset={mobileFitInset}
           />
         </div>
 
@@ -357,7 +543,7 @@ export default function App() {
         }}>
           {/* Drag handle / collapsed summary */}
           <button
-            onClick={() => setMobilePanelOpen(o => !o)}
+            onClick={handleToggleMobilePanel}
             aria-label={mobilePanelOpen ? 'Collapse panel' : 'Expand panel'}
             style={{
               display: 'flex',
@@ -375,9 +561,18 @@ export default function App() {
           >
             <div style={{ width: 40, height: 4, background: '#d1d5db', borderRadius: 2 }} />
             {!mobilePanelOpen && (
-              <span style={{ fontSize: '12px', color: '#6b7280' }}>
+              <span style={{
+                fontSize: '12px',
+                color: '#6b7280',
+                // Region names run long ("Jackson / Northwest Wyoming") and this is a
+                // 52px bar on a phone.
+                maxWidth: '100%',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
                 {tab === 'collections'
-                  ? (collections.activeSpot?.name ?? 'Tap to browse collections')
+                  ? (collections.activeSpot?.name ?? collectionsSummary)
                   : routes.length > 0
                   ? `${routes.length} route${routes.length !== 1 ? 's' : ''} found — tap to view`
                   : isSearching
@@ -417,21 +612,28 @@ export default function App() {
               ) : (
                 <CollectionsPanel
                   cities={collections.cities}
+                  expandedCity={collections.expandedCity}
                   activeSpot={collections.activeSpot}
                   isLoadingIndex={collections.isLoadingIndex}
+                  isLoadingCity={collections.isLoadingCity}
                   isLoadingSpot={collections.isLoadingSpot}
                   error={collections.error}
-                  onSelectSpot={collections.selectSpot}
+                  onToggleCity={handleToggleCity}
+                  onSelectSpot={handleSelectSpot}
+                  onHoverSpot={handleHoverSpot}
                   onBack={handleBackToCollections}
                   groups={groups}
                   activeGroupId={activeGroupId}
                   activeRouteId={activeRouteId}
                   onSelectGroup={handleSelectGroup}
                   onSelectRoute={handleSelectRoute}
+                  onSelectPath={handleSelectPath}
                   onHoverGroup={setHoveredGroupId}
                   onHoverRoute={setHoveredRouteId}
                   sortMode={sortMode}
                   onSortModeChange={setSortMode}
+                  disciplineFilter={disciplineFilter}
+                  onDisciplineFilterChange={handleDisciplineFilterChange}
                   fillHeight={true}
                 />
               )}
@@ -499,6 +701,7 @@ export default function App() {
           onSelectGroup={handleSelectGroup}
           onSelectPath={handleSelectPath}
           scrubPosition={scrubPosition}
+          fitAllKey={regionFitKey}
         />
       </div>
 
@@ -539,21 +742,28 @@ export default function App() {
           ) : (
             <CollectionsPanel
               cities={collections.cities}
+              expandedCity={collections.expandedCity}
               activeSpot={collections.activeSpot}
               isLoadingIndex={collections.isLoadingIndex}
+              isLoadingCity={collections.isLoadingCity}
               isLoadingSpot={collections.isLoadingSpot}
               error={collections.error}
-              onSelectSpot={collections.selectSpot}
+              onToggleCity={handleToggleCity}
+              onSelectSpot={handleSelectSpot}
+              onHoverSpot={handleHoverSpot}
               onBack={handleBackToCollections}
               groups={groups}
               activeGroupId={activeGroupId}
               activeRouteId={activeRouteId}
               onSelectGroup={handleSelectGroup}
               onSelectRoute={handleSelectRoute}
+              onSelectPath={handleSelectPath}
               onHoverGroup={setHoveredGroupId}
               onHoverRoute={setHoveredRouteId}
               sortMode={sortMode}
               onSortModeChange={setSortMode}
+              disciplineFilter={disciplineFilter}
+              onDisciplineFilterChange={handleDisciplineFilterChange}
             />
           )}
         </div>

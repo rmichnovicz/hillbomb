@@ -1,0 +1,32 @@
+# Keep the build context small and the image clean. Anything not needed to RUN
+# the app is excluded — a fat context is uploaded to Cloud Build on every deploy.
+
+.git
+.gitignore
+**/.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+frontend/dist
+static
+
+# Tests and dev tooling — not needed at runtime.
+backend/tests
+backend/scripts/bench_elevation.py
+pytest.ini
+.claude
+
+# Local caches and scratch output. backend/_cache_twins.pkl in particular is a
+# local artifact, not something to ship.
+backend/_cache_twins.pkl
+routes.geojson
+**/.cache
+.DS_Store
+
+# Docs and planning notes.
+docs
+*.md
+!backend/data/*.md
+Sick Slopes.zip
+_unzipped
+cpp

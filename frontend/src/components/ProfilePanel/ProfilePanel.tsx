@@ -9,6 +9,8 @@
  */
 import {
   Chart as ChartJS,
+  BarController,
+  LineController,
   CategoryScale,
   LinearScale,
   BarElement,
@@ -24,7 +26,26 @@ import { useRef, useCallback } from 'react'
 import { gradeToColor } from '../../utils/gradeColor'
 import type { Route } from '../../types'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend)
+// Register the CONTROLLERS here too, not just the scales and elements.
+//
+// Leaving them out appears to work: importing react-chartjs-2 registers all eight
+// controllers as a side effect of its typed-chart exports. But those calls are
+// /* #__PURE__ */ and the package sets "sideEffects": false, so Rollup drops them
+// from a production bundle — and only there does this throw
+// '"bar" is not a registered controller' the moment the panel mounts. Dev, vitest
+// and `vite preview` of an unminified build all hide it.
+// Guarded by ProfilePanel.registration.test.ts.
+ChartJS.register(
+  BarController,
+  LineController,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Tooltip,
+  Legend,
+)
 
 interface ProfilePanelProps {
   route: Route
@@ -35,6 +56,17 @@ interface ProfilePanelProps {
 export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
   const chartRef = useRef<ChartJS | null>(null)
   const { elevations, segment_distances, speed_profile, metadata } = route
+
+  // Every hook has to run before the early return below. Declared after it, this
+  // one is skipped for an unchartable route, so swapping the active route from a
+  // normal one to a <2-point one changes the hook count on a live instance and
+  // React throws "Rendered fewer hooks than expected".
+  //
+  // Clears the scrub (null) on leave so the map pin is removed, rather than
+  // snapping it back to the route start (position 0).
+  const handleMouseLeave = useCallback(() => {
+    onScrubPosition?.(null)
+  }, [onScrubPosition])
 
   if (elevations.length < 2) return null
 
@@ -123,12 +155,6 @@ export function ProfilePanel({ route, onScrubPosition }: ProfilePanelProps) {
       }
     },
   }
-
-  // Clear the scrub (null) on leave so the map pin is removed, rather than
-  // snapping it back to the route start (position 0).
-  const handleMouseLeave = useCallback(() => {
-    onScrubPosition?.(null)
-  }, [onScrubPosition])
 
   return (
     <div style={{ padding: '12px 16px 8px' }}>

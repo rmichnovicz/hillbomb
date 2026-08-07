@@ -1,5 +1,7 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import { StartGroupCard } from './StartGroupCard'
+import { RouteCard } from './RouteCard'
+import { buildDescentLabels } from '../../utils/routeLabel'
 import type { StartGroup } from '../../types'
 
 export type SortMode = 'longest' | 'fastest'
@@ -22,6 +24,14 @@ interface RouteListProps {
   hasSearched?: boolean
   /** When false, the list grows with its content instead of filling parent height. Use in scrollable panels. */
   fillHeight?: boolean
+  /**
+   * Render every route as its own top-level card instead of folders keyed on start
+   * point. Used by Collections, where the spot is already one named descent and a
+   * folder per starting point is a level of nesting with nothing in it.
+   */
+  flat?: boolean
+  /** Required by `flat`: selects a route and its group together, without toggling. */
+  onSelectPath?: (routeId: string, startNodeId: string) => void
 }
 
 export function RouteList({
@@ -39,15 +49,31 @@ export function RouteList({
   error,
   hasSearched = false,
   fillHeight = true,
+  flat = false,
+  onSelectPath,
 }: RouteListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
+  // Groups arrive sorted, and their members are sorted within each group, so flattening
+  // preserves the ranking the sidebar already implies.
+  const flatRoutes = useMemo(() => groups.flatMap(g => g.routes), [groups])
+
+  // Names depend on the whole set: two lines running the same way need Upper/Lower to
+  // tell them apart, which a single route can't know about itself.
+  const descentLabels = useMemo(
+    () => (flat ? buildDescentLabels(flatRoutes) : new Map<string, string>()),
+    [flat, flatRoutes],
+  )
+
+  // In flat mode cards are keyed on route, so scroll to the selected route rather than
+  // to the group that contains it.
+  const scrollToId = flat ? activeRouteId : activeGroupId
   useEffect(() => {
-    if (!activeGroupId) return
-    const el = cardRefs.current.get(activeGroupId)
+    if (!scrollToId) return
+    const el = cardRefs.current.get(scrollToId)
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  }, [activeGroupId])
+  }, [scrollToId])
 
   return (
     <div
@@ -109,22 +135,39 @@ export function RouteList({
               : 'Search an area to find hill bombs.'}
           </p>
         )}
-        {groups.map(group => (
-          <StartGroupCard
-            key={group.startNodeId}
-            group={group}
-            isActive={group.startNodeId === activeGroupId}
-            activeRouteId={activeRouteId}
-            onSelectGroup={onSelectGroup}
-            onSelectRoute={onSelectRoute}
-            onHoverGroup={onHoverGroup}
-            onHoverRoute={onHoverRoute}
-            cardRef={el => {
-              if (el) cardRefs.current.set(group.startNodeId, el)
-              else cardRefs.current.delete(group.startNodeId)
-            }}
-          />
-        ))}
+        {flat
+          ? flatRoutes.map(route => (
+              <RouteCard
+                key={route.route_id}
+                route={route}
+                label={descentLabels.get(route.route_id) ?? route.metadata.name}
+                isActive={route.route_id === activeRouteId}
+                onSelect={(routeId, startNodeId) =>
+                  onSelectPath ? onSelectPath(routeId, startNodeId) : onSelectRoute(routeId)
+                }
+                onHoverRoute={onHoverRoute}
+                cardRef={el => {
+                  if (el) cardRefs.current.set(route.route_id, el)
+                  else cardRefs.current.delete(route.route_id)
+                }}
+              />
+            ))
+          : groups.map(group => (
+              <StartGroupCard
+                key={group.startNodeId}
+                group={group}
+                isActive={group.startNodeId === activeGroupId}
+                activeRouteId={activeRouteId}
+                onSelectGroup={onSelectGroup}
+                onSelectRoute={onSelectRoute}
+                onHoverGroup={onHoverGroup}
+                onHoverRoute={onHoverRoute}
+                cardRef={el => {
+                  if (el) cardRefs.current.set(group.startNodeId, el)
+                  else cardRefs.current.delete(group.startNodeId)
+                }}
+              />
+            ))}
       </div>
     </div>
   )

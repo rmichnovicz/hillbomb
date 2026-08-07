@@ -8,7 +8,7 @@
  *   F_rolling  =  Crr * m * g
  *   F_net      =  F_gravity - F_drag - F_rolling
  *   a          =  F_net / m
- *   v_new      =  sqrt(max(v² + 2*a*sub_ds, 0))
+ *   v_new      =  min(sqrt(max(v² + 2*a*sub_ds, 0)), v_max)
  */
 import { describe, it, expect } from 'vitest'
 import { simulateSpeedProfile } from '../../utils/physics'
@@ -20,6 +20,15 @@ const LONGBOARDER: RiderParams = {
   frontal_area_m2: 0.35,
   crr_physics: 0.012,
   crr_pathfinding: 0.020,
+}
+
+const MTB: RiderParams = {
+  weight_kg: 85,
+  drag_coefficient: 1.00,
+  frontal_area_m2: 0.45,
+  crr_physics: 0.030,
+  crr_pathfinding: 0.030,
+  max_speed_kmh: 40,
 }
 
 const CYCLIST_DROPS: RiderParams = {
@@ -132,5 +141,41 @@ describe('simulateSpeedProfile — physics correctness', () => {
     const { topSpeed: lb } = simulateSpeedProfile(elevs, dists, LONGBOARDER)
     const { topSpeed: cy } = simulateSpeedProfile(elevs, dists, CYCLIST_DROPS)
     expect(cy).toBeGreaterThan(lb)
+  })
+})
+
+// ── Top-speed cap ─────────────────────────────────────────────────────────────
+//
+// Mirrors backend/tests/test_physics.py. The cap stands in for a brake the model
+// doesn't have; see backend/config.py RiderParams.max_speed_kmh.
+
+describe('max_speed_kmh cap', () => {
+  const steepDrop = Array.from({ length: 41 }, (_, i) => 600 - 15 * i)  // 15% over 4 km
+  const dists = new Array(40).fill(100)
+
+  it('clamps top speed to the cap', () => {
+    const { profile, topSpeed } = simulateSpeedProfile(steepDrop, dists, MTB)
+    expect(topSpeed).toBeCloseTo(40, 2)
+    expect(Math.max(...profile)).toBeLessThanOrEqual(40 + 1e-9)
+  })
+
+  it('leaves an uncapped profile alone', () => {
+    const { topSpeed } = simulateSpeedProfile(steepDrop, dists, CYCLIST_DROPS)
+    expect(topSpeed).toBeGreaterThan(60)
+  })
+
+  it('is a ceiling, never a floor', () => {
+    const gentle = Array.from({ length: 11 }, (_, i) => 100 - i)  // 1% grade
+    const d = new Array(10).fill(100)
+    const capped = simulateSpeedProfile(gentle, d, MTB)
+    const uncapped = simulateSpeedProfile(gentle, d, { ...MTB, max_speed_kmh: null })
+    expect(capped.topSpeed).toBeLessThan(40)
+    expect(capped.profile).toEqual(uncapped.profile)
+  })
+
+  it('agrees with the backend on a capped run', () => {
+    // Pinned against backend/tests/test_physics.py::test_cap_clamps_top_speed.
+    const { topSpeed } = simulateSpeedProfile(steepDrop, dists, MTB)
+    expect(topSpeed).toBeCloseTo(40.0, 2)
   })
 })

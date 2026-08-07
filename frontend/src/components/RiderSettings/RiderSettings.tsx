@@ -11,6 +11,22 @@ interface RiderSettingsProps {
   activeRouteId?: string | null
 }
 
+const PROFILE_EMOJI: Record<RiderProfile, string> = {
+  longboarder: '🛹',
+  cyclist_upright: '🚲',
+  cyclist_drops: '🚴',
+  gravel: '🚵',
+  mtb: '⛰️',
+}
+
+const PROFILE_LABEL: Record<RiderProfile, string> = {
+  longboarder: 'Longboard',
+  cyclist_upright: 'Upright',
+  cyclist_drops: 'Drops',
+  gravel: 'Gravel',
+  mtb: 'MTB',
+}
+
 interface SliderRowProps {
   label: string
   value: number
@@ -76,23 +92,30 @@ export function RiderSettings({ profile, params, onProfileChange, onParamsChange
           textAlign: 'left',
         }}
       >
-        <span>Rider profile</span>
+        <span>Rider profile {PROFILE_EMOJI[profile]}</span>
         <span style={{ fontSize: '10px', color: '#9ca3af' }}>{isOpen ? '▾' : '▸'}</span>
       </button>
 
       {isOpen && (
         <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+          {/* Grid, not a flex row: five profiles in one row leaves each ~40px wide. */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '6px',
+            marginBottom: '10px',
+          }}>
             {(Object.keys(RIDER_PROFILES) as RiderProfile[]).map(p => (
               <button
                 key={p}
                 onClick={() => {
                   onProfileChange(p)
+                  // Spread the whole preset so switching *off* a capped profile drops
+                  // max_speed_kmh rather than carrying the cap onto tarmac.
                   onParamsChange({ ...RIDER_PROFILES[p], weight_kg: params.weight_kg })
                 }}
                 aria-pressed={profile === p}
                 style={{
-                  flex: 1,
                   fontSize: '11px',
                   padding: '4px 0',
                   borderRadius: '4px',
@@ -104,7 +127,7 @@ export function RiderSettings({ profile, params, onProfileChange, onParamsChange
                   fontWeight: profile === p ? 600 : 400,
                 }}
               >
-                {p === 'longboarder' ? 'Longboard 🛹' : p === 'cyclist_upright' ? 'Upright 🚴' : 'Drops 🚴'}
+                {PROFILE_LABEL[p]} {PROFILE_EMOJI[p]}
               </button>
             ))}
           </div>
@@ -137,6 +160,25 @@ export function RiderSettings({ profile, params, onProfileChange, onParamsChange
             format={v => v.toFixed(3)}
             onChange={v => set('crr_physics', v)}
           />
+
+          {/* Only the dirt profiles carry a cap, so the row appears with them rather
+              than sitting at "off" for everyone. The note is doing real work: without
+              it a pegged-flat speed profile looks like a bug in the chart. */}
+          {params.max_speed_kmh != null && (
+            <>
+              <SliderRow
+                label="Top speed"
+                value={params.max_speed_kmh}
+                min={15} max={90} step={1}
+                format={v => `${v} km/h`}
+                onChange={v => set('max_speed_kmh', v)}
+              />
+              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '-4px', marginBottom: '4px' }}>
+                Braking isn't modelled; off-road the sim would run away without this.
+              </div>
+            </>
+          )}
+
           <div style={{ borderTop: '1px solid #f3f4f6', marginTop: '4px', paddingTop: '8px' }}>
             <SliderRow
               label="Search Crr"

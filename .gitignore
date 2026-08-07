@@ -12,6 +12,11 @@ backend/_out/
 frontend/node_modules/
 frontend/dist/
 
+# Playwright output (traces, screenshots, HTML report)
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
 # Elevation tile cache (large binary files — auto-downloaded on first run)
 # HTTP fixture JSON is committed (small, makes integration tests network-free)
 backend/tests/fixtures/elevation/dep13/
@@ -25,3 +30,11 @@ _unzipped/
 backend/_cache_twins.pkl
 *.zip
 .claude/settings.local.json
+
+# Local road-network snapshot — a build artifact of a few hundred MB.
+# Build with: python -m backend.scripts.build_gol (see data/README.md)
+data/*.gol
+data/*.gol.regions.json
+
+# Wrangler's local state. wrangler-account.json carries the Cloudflare account id.
+.wrangler/

@@ -7,10 +7,14 @@ Model (per segment, sub-stepped for accuracy):
   F_rolling  =  Crr * m * g
   F_net      =  F_gravity - F_drag - F_rolling
   a          =  F_net / m
-  v_new      =  sqrt(max(v² + 2*a*ds, 0))  [energy method; sub-stepped]
+  v_new      =  min(sqrt(max(v² + 2*a*ds, 0)), v_max)  [energy method; sub-stepped]
 
 grade: (elev_end - elev_start) / distance  (positive = uphill, negative = downhill)
 Outputs are in km/h.
+
+v_max comes from params.max_speed_kmh and is None (uncapped) for the road profiles.
+It stands in for a brake, which this model otherwise does not have — see
+config.RiderParams.max_speed_kmh for why dirt profiles need one and tarmac doesn't.
 
 NOTE: usePhysics.ts in the frontend must implement the same model.
       When changing this file, update usePhysics.ts to match.
@@ -54,6 +58,9 @@ def simulate_speed_profile(
     crr = params.crr_physics
     drag_k = 0.5 * config.air_density_kg_m3 * params.drag_coefficient * params.frontal_area_m2
 
+    # inf rather than a branch in the hot sub-step loop; min() against it is a no-op.
+    v_max = params.max_speed_kmh / 3.6 if params.max_speed_kmh is not None else math.inf
+
     v = 0.0  # starting from rest
 
     for i in range(n - 1):
@@ -70,7 +77,7 @@ def simulate_speed_profile(
             f_net = f_gravity - f_drag - f_rolling
             a = f_net / m
             v_sq = v * v + 2.0 * a * sub_ds
-            v = math.sqrt(max(v_sq, 0.0))
+            v = min(math.sqrt(max(v_sq, 0.0)), v_max)
 
         speed_ms[i + 1] = v
 

@@ -11,7 +11,13 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from ..overpass import _contiguous_inbbox_runs, fetch_osm_data
+from ..overpass import (
+    ROAD_NETWORK_TYPES,
+    _contiguous_inbbox_runs,
+    _overpass_cache_path,
+    _parse_trail_difficulty,
+    fetch_osm_data,
+)
 
 # south, west, north, east — a 1°×1° box at the origin's NE quadrant.
 BBOX = (0.0, 0.0, 1.0, 1.0)
@@ -142,7 +148,12 @@ def _client_returning(responses):
 
         def post(self, *a, **k):
             calls.append(1)
-            return responses[len(calls) - 1]
+            resp = responses[len(calls) - 1]
+            # An Exception entry simulates a transport-level failure (connection
+            # refused, DNS, read timeout) rather than an HTTP status response.
+            if isinstance(resp, Exception):
+                raise resp
+            return resp
 
     return _Client, calls
 
@@ -216,3 +227,126 @@ def test_falls_back_to_backoff_on_unparseable_retry_after():
     with patch("backend.overpass._BACKOFF_BASE_S", 5.0):
         _, _, slept = _fetch_with_responses(responses)
     assert slept.call_args_list[0].args[0] == 5.0
+
+
+# ── Retry notifications ───────────────────────────────────────────────────────
+#
+# The frontend shows these as status text. Without them an Overpass outage is up
+# to ~35 s of silent spinner, which reads as "the app is broken" rather than
+# "the upstream is down and we're waiting".
+
+def _fetch_capturing_retries(responses, max_attempts=4):
+    seen = []
+    client_cls, calls = _client_returning(responses)
+    with patch("backend.overpass.httpx.Client", client_cls), \
+         patch("backend.overpass._CACHE_TTL", 0), \
+         patch("backend.overpass._MAX_ATTEMPTS", max_attempts), \
+         patch("backend.overpass._BACKOFF_BASE_S", 5.0), \
+         patch("backend.overpass.time.sleep"):
+        result = fetch_osm_data(BBOX, on_retry=lambda *a: seen.append(a))
+    return result, seen, calls
+
+
+def test_on_retry_reports_status_attempt_and_delay():
+    _, seen, _ = _fetch_capturing_retries([_FakeResp(429), _FakeResp(200, elements=[])])
+    assert seen == [("429", 1, 4, 5.0)]
+
+
+def test_on_retry_fires_once_per_retry_with_growing_delay():
+    responses = [_FakeResp(429), _FakeResp(504), _FakeResp(200, elements=[])]
+    _, seen, _ = _fetch_capturing_retries(responses)
+    assert [(s[0], s[3]) for s in seen] == [("429", 5.0), ("504", 10.0)]
+
+
+def test_on_retry_not_called_when_first_attempt_succeeds():
+    _, seen, _ = _fetch_capturing_retries([_FakeResp(200, elements=[])])
+    assert seen == []
+
+
+def test_transport_error_is_retried_and_reported():
+    """A real outage is a connection error, not a 429.
+
+    Retrying only on status codes meant the one case this message exists for --
+    Overpass being genuinely unreachable -- failed instantly with no retry and no
+    notification.
+    """
+    responses = [httpx.ConnectError("connection refused"), _FakeResp(200, elements=[])]
+    _, seen, calls = _fetch_capturing_retries(responses)
+    assert len(calls) == 2, "should have retried after the transport error"
+    assert seen == [("ConnectError", 1, 4, 5.0)]
+
+
+def test_transport_error_still_raises_once_attempts_exhausted():
+    responses = [httpx.ConnectError("refused")] * 3
+    client_cls, calls = _client_returning(responses)
+    with patch("backend.overpass.httpx.Client", client_cls), \
+         patch("backend.overpass._CACHE_TTL", 0), \
+         patch("backend.overpass._MAX_ATTEMPTS", 3), \
+         patch("backend.overpass.time.sleep"):
+        with pytest.raises(httpx.ConnectError):
+            fetch_osm_data(BBOX)
+    assert len(calls) == 3
+
+
+# ── Trail difficulty ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("tags,expected", [
+    ({}, None),
+    ({"mtb:scale": "0"}, 0),
+    ({"mtb:scale": "3"}, 3),
+    ({"mtb:scale": "6"}, 6),
+    # Modifiers are common in the wild; the leading digit is what we keep.
+    ({"mtb:scale": "2+"}, 2),
+    ({"mtb:scale": "1-"}, 1),
+    # Junk is treated as absent rather than guessed at.
+    ({"mtb:scale": "7"}, None),
+    ({"mtb:scale": "yes"}, None),
+    ({"mtb:scale": ""}, None),
+    # sac_scale is the fallback when mtb:scale is missing.
+    ({"sac_scale": "mountain_hiking"}, 2),
+    ({"sac_scale": "difficult_alpine_hiking"}, 6),
+    ({"sac_scale": "not_a_real_value"}, None),
+    # Both present: the harder of the two wins.
+    ({"mtb:scale": "1", "sac_scale": "alpine_hiking"}, 4),
+    ({"mtb:scale": "5", "sac_scale": "hiking"}, 5),
+])
+def test_parse_trail_difficulty(tags, expected):
+    assert _parse_trail_difficulty(tags) is expected
+
+
+def test_fetch_osm_data_reads_trail_difficulty_onto_the_way():
+    """The tag has to survive the parse, not just the helper."""
+    elements = [
+        {"type": "node", "id": 1, "lat": 0.5, "lon": 0.5},
+        {"type": "node", "id": 2, "lat": 0.6, "lon": 0.6},
+        {"type": "way", "id": 10, "nodes": [1, 2],
+         "tags": {"highway": "path", "mtb:scale": "4"}},
+    ]
+    client_cls, _ = _client_returning([_FakeResp(200, elements=elements)])
+    with patch("backend.overpass.httpx.Client", client_cls), \
+         patch("backend.overpass._CACHE_TTL", 0):
+        _nodes, ways = fetch_osm_data(BBOX)
+    assert [w.trail_difficulty for w in ways] == [4]
+
+
+def test_track_is_in_the_fetched_network():
+    """Fire roads and gravel doubletrack are `highway=track`; without it in
+    ROAD_NETWORK_TYPES nothing downstream can reach unpaved terrain at all."""
+    assert "track" in ROAD_NETWORK_TYPES
+
+
+def test_cache_key_changes_with_the_fetched_network():
+    """A widened ROAD_NETWORK_TYPES must retire cached responses, not reuse them.
+
+    Keyed on bbox alone, adding `track` left every cached entry in place: within TTL,
+    still served, and missing every fire road the new query asks for.
+    """
+    before = _overpass_cache_path(BBOX)
+    with patch("backend.overpass.ROAD_NETWORK_TYPES", frozenset({"residential", "track"})):
+        after = _overpass_cache_path(BBOX)
+    assert before != after
+
+
+def test_cache_key_is_stable_for_the_same_inputs():
+    assert _overpass_cache_path(BBOX) == _overpass_cache_path(BBOX)
+    assert _overpass_cache_path(BBOX) != _overpass_cache_path((0.0, 0.0, 2.0, 2.0))

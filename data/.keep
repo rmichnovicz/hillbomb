@@ -1,0 +1,10 @@
+Keeps `data/` present in the Docker build context.
+
+The Dockerfile copies `data/.keep data/hillbomb-deploy.gol* ./data/` so that the
+GOL is optional — an image built without one still works, falling back to
+Overpass for every search. A Docker glob that matches zero files is a build
+error, so this file guarantees at least one match.
+
+It is deliberately not a `.md`: both .dockerignore and .gcloudignore exclude
+`*.md`, so a Markdown sentinel is absent from the build context exactly when the
+COPY needs it. See data/README.md for what actually goes in this directory.

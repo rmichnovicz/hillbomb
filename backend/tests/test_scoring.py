@@ -17,7 +17,7 @@ compute_flow_score(route, G, nodes_by_id, config) mutates and returns the route.
 
 import networkx as nx
 import pytest
-from ..config import SearchConfig, HIGHWAY_RANK
+from ..config import RIDER_PROFILES, SearchConfig, HIGHWAY_RANK
 from ..types import OSMNode, Route
 from ..scoring import compute_flow_score, score_to_grade
 
@@ -260,3 +260,69 @@ def test_custom_stoplight_penalty():
     G, nodes = _make_graph(nids, traffic_signals={2})
     result = compute_flow_score(route, G, nodes, config)
     assert result.flow_score == pytest.approx(50.0)
+
+
+# ── Rider-relative roughness ──────────────────────────────────────────────────
+#
+# Which surfaces count as rough belongs to the rider, not the road. See
+# config.RiderParams.rough_surface_categories.
+
+def test_gravel_rider_is_not_penalized_for_gravel():
+    """The bug this exists to prevent: every dirt spot in Collections graded F.
+
+    The surface penalty deducts PER EDGE, so a long gravel descent accrues -20 a
+    couple of hundred times and floors at zero. Correct for a road cyclist who
+    wanted tarmac; nonsense for a gravel rider, who came for the gravel.
+    """
+    nids = [1, 2, 3, 4]
+    G, nodes = _make_graph(nids, surface="gravel")
+    route = _make_route(nids)
+    compute_flow_score(route, G, nodes, SearchConfig(), RIDER_PROFILES["gravel"])
+    assert route.flow_score == 100.0
+    assert route.flow_grade == "A"
+
+
+def test_gravel_rider_is_still_penalized_for_cobbles():
+    """Narrowed, not disabled — cobbles break a gravel rider's flow too."""
+    nids = [1, 2, 3]
+    G, nodes = _make_graph(nids, surface="cobblestone")
+    route = _make_route(nids)
+    compute_flow_score(route, G, nodes, SearchConfig(), RIDER_PROFILES["gravel"])
+    assert route.flow_score == 100.0 - 2 * 30.0
+
+
+def test_mtb_rider_is_penalized_for_no_surface_at_all():
+    for surface in ("gravel", "unpaved", "cobblestone", "dirt", "ground"):
+        nids = [1, 2, 3]
+        G, nodes = _make_graph(nids, surface=surface)
+        route = _make_route(nids)
+        compute_flow_score(route, G, nodes, SearchConfig(), RIDER_PROFILES["mtb"])
+        assert route.flow_score == 100.0, surface
+
+
+def test_mtb_rider_is_still_penalized_for_traffic():
+    """Only the surface term is relaxed; junctions and signals still count."""
+    nids = [1, 2, 3]
+    G, nodes = _make_graph(nids, surface="ground")
+    nodes[2].is_stop_sign = True
+    G.nodes[2]["is_stop_sign"] = True
+    route = _make_route(nids)
+    compute_flow_score(route, G, nodes, SearchConfig(), RIDER_PROFILES["mtb"])
+    assert route.flow_score == 100.0 - 10.0
+
+
+@pytest.mark.parametrize("profile", ["longboarder", "cyclist_upright", "cyclist_drops"])
+def test_road_profiles_keep_the_original_penalties(profile):
+    nids = [1, 2, 3]
+    G, nodes = _make_graph(nids, surface="gravel")
+    route = _make_route(nids)
+    compute_flow_score(route, G, nodes, SearchConfig(), RIDER_PROFILES[profile])
+    assert route.flow_score == 100.0 - 2 * 20.0
+
+
+def test_omitting_params_keeps_the_pre_profile_behaviour():
+    nids = [1, 2, 3]
+    G, nodes = _make_graph(nids, surface="gravel")
+    route = _make_route(nids)
+    compute_flow_score(route, G, nodes, SearchConfig())
+    assert route.flow_score == 100.0 - 2 * 20.0

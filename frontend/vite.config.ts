@@ -14,5 +14,9 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    // Scoped to src/ so vitest's default glob doesn't pick up e2e/*.spec.ts —
+    // those are Playwright specs and throw "did not expect test() to be called
+    // here" when run under vitest. Run them with `npm run test:e2e`.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 })

@@ -1,93 +1,8 @@
-import { useState } from 'react'
 import { flowGradeColor } from '../../utils/gradeColor'
-import { downloadGPX } from '../../utils/gpx'
+import { DownloadButton } from './DownloadButton'
+import { SurfaceBar } from './SurfaceBar'
+import { TrailGrade } from './TrailGrade'
 import type { Route, StartGroup } from '../../types'
-
-/** Tray-and-arrow download icon. Inherits color via `currentColor`. */
-function DownloadIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3v12" />
-      <path d="m7 10 5 5 5-5" />
-      <path d="M5 21h14" />
-    </svg>
-  )
-}
-
-function DownloadButton({ route }: { route: Route }) {
-  const [hover, setHover] = useState(false)
-  return (
-    <button
-      onClick={e => { e.stopPropagation(); downloadGPX(route) }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      title="Download GPX"
-      aria-label="Download GPX"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '24px',
-        height: '24px',
-        borderRadius: '6px',
-        border: 'none',
-        background: hover ? '#eff6ff' : 'transparent',
-        cursor: 'pointer',
-        color: hover ? '#2563eb' : '#9ca3af',
-        flexShrink: 0,
-        padding: 0,
-        transition: 'background 120ms, color 120ms',
-      }}
-    >
-      <DownloadIcon />
-    </button>
-  )
-}
-
-const SURFACE_COLORS: Record<string, string> = {
-  paved:       '#6b7280',
-  gravel:      '#d97706',
-  unpaved:     '#92400e',
-  cobblestone: '#7c3aed',
-  unknown:     '#d1d5db',
-}
-
-const SURFACE_LABELS: Record<string, string> = {
-  paved:       'Paved',
-  gravel:      'Gravel',
-  unpaved:     'Unpaved',
-  cobblestone: 'Cobblestone',
-  unknown:     'Unknown',
-}
-
-function SurfaceBar({ surfacePcts }: { surfacePcts: Record<string, number> }) {
-  const entries = Object.entries(surfacePcts).filter(([, pct]) => pct >= 1)
-  if (entries.length === 0) return null
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
-      {/* Proportional segmented bar */}
-      <div style={{ display: 'flex', height: '4px', borderRadius: '2px', overflow: 'hidden', width: '60px', flexShrink: 0 }}>
-        {entries.map(([cat, pct]) => (
-          <div
-            key={cat}
-            title={`${SURFACE_LABELS[cat] ?? cat}: ${pct}%`}
-            style={{ width: `${pct}%`, background: SURFACE_COLORS[cat] ?? '#9ca3af' }}
-          />
-        ))}
-      </div>
-      {/* Labels */}
-      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-        {entries.map(([cat, pct]) => (
-          <span key={cat} style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: '#6b7280' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '1px', background: SURFACE_COLORS[cat] ?? '#9ca3af', flexShrink: 0, display: 'inline-block' }} />
-            {pct >= 5 ? `${SURFACE_LABELS[cat] ?? cat} ${Math.round(pct)}%` : `${Math.round(pct)}%`}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 interface StartGroupCardProps {
   group: StartGroup
@@ -173,6 +88,8 @@ function RouteRow({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+        {/* Renders nothing on an ungraded route, which is most of them. */}
+        <TrailGrade difficulty={route.trail_difficulty} />
         {hasPhysics ? (
           <span style={{ fontSize: '12px', color: '#374151' }}>
             {Math.round(top_speed_kmh!)} km/h
@@ -246,6 +163,8 @@ export function StartGroupCard({
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {/* The group header shows its headline route's grade. */}
+            <TrailGrade difficulty={best.trail_difficulty} />
             {hasPhysics ? (
               <span style={{ fontSize: '13px', fontWeight: 600, color: '#111827' }}>
                 {Math.round(top_speed_kmh!)} km/h

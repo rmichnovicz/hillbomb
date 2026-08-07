@@ -3,6 +3,10 @@ uvicorn[standard]==0.34.0
 networkx==3.4.2
 numpy==2.2.1
 httpx==0.28.1
+# Reads the local .gol road-network snapshot (backend/geodesk_source.py). Optional
+# at runtime — without HILLBOMB_GOL set, nothing imports it and searches use
+# Overpass — but pinned here because the deployed image ships a GOL.
+geodesk==2.2.3
 rasterio==1.4.3
 boto3==1.38.27
 pytest==9.0.3

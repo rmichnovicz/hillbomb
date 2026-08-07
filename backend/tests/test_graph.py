@@ -3,7 +3,8 @@ Tests for graph.py — build_graph.
 
 Key invariants under test:
   - Long bridges (> max_bridge_span_m) are excluded from the graph entirely
-  - Short bridges (< max_bridge_span_m) are included as straight-line edges
+  - Short bridges (< max_bridge_span_m) are edged over their real node sequence
+  - Bridge/tunnel interiors get deck elevations, not the DEM's ground underneath
   - The Golden Gate Bridge scale (2.7 km) never produces routes in results
   - Normal non-bridge ways produce the expected edge sequence
   - Peak / valley / inflection node tagging works
@@ -34,6 +35,7 @@ def _way(
     is_tunnel: bool = False,
     surface: str = "asphalt",
     name: str = "",
+    trail_difficulty: int | None = None,
 ) -> OSMWay:
     return OSMWay(
         id=wid,
@@ -45,6 +47,7 @@ def _way(
         is_tunnel=is_tunnel,
         surface=surface,
         name=name,
+        trail_difficulty=trail_difficulty,
     )
 
 
@@ -139,6 +142,105 @@ class TestBridgeSpanFilter:
         G = _build(nodes, ways)
         # Both directions present (two-way by default)
         assert G.has_edge(1, 2) or G.has_edge(2, 1)
+
+
+# ── Bridge / tunnel geometry and deck elevation ────────────────────────────────
+
+class TestDeckGeometry:
+    """
+    A bridge or tunnel way must keep its real node sequence.
+
+    OSM ways tagged bridge=yes are not always a single short span: TIGER-era imports
+    routinely tag hundreds of metres of ordinary road that way (Muir Woods Road,
+    way 12183699 — 51 nodes, 624 m of curving road, 469 m end to end). Collapsing
+    such a way to a start→end chord dropped every shape point in between, drawing a
+    straight line across terrain the road curves around — visible as a jump on the
+    map and in exported GPX, and a route length short by the difference.
+    """
+
+    # A five-node deck running due north, ~25 m between nodes (≈100 m total), with a
+    # DEM that dips 12 m into the creek bed underneath it.
+    DECK_NODES = [
+        _node(1, lat=37.75000, lon=-122.45, elevation=30.0),
+        _node(2, lat=37.75023, lon=-122.45, elevation=18.0),
+        _node(3, lat=37.75045, lon=-122.45, elevation=18.0),
+        _node(4, lat=37.75068, lon=-122.45, elevation=19.0),
+        _node(5, lat=37.75090, lon=-122.45, elevation=26.0),
+    ]
+
+    def test_bridge_keeps_every_intermediate_node(self):
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True)])
+        for a, b in ((1, 2), (2, 3), (3, 4), (4, 5)):
+            assert G.has_edge(a, b), f"Deck edge {a}→{b} missing — way was collapsed to a chord"
+
+    def test_bridge_has_no_chord_edge_across_its_interior(self):
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True)])
+        assert not G.has_edge(1, 5), "Start→end chord skips the deck's shape points"
+
+    def test_two_way_bridge_gets_both_directions_along_the_sequence(self):
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True, oneway=False)])
+        assert G.has_edge(2, 3) and G.has_edge(3, 2)
+
+    def test_oneway_bridge_is_directed_along_the_sequence(self):
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True, oneway=True)])
+        assert G.has_edge(2, 3)
+        assert not G.has_edge(3, 2)
+
+    def test_deck_interior_elevation_is_interpolated_not_dem(self):
+        """The DEM's 12 m dip under the deck must not survive into the graph."""
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True)])
+        interior = [G.nodes[n]["elevation"] for n in (2, 3, 4)]
+        assert all(26.0 < e < 30.0 for e in interior), (
+            f"Interior deck nodes should ramp between the ends (30 m → 26 m), got {interior}"
+        )
+        # Evenly spaced nodes → an even ramp, ~1 m per node.
+        assert interior == pytest.approx([29.0, 28.0, 27.0], abs=0.2)
+
+    def test_deck_endpoints_keep_measured_elevation(self):
+        """Bridge ends sit on real ground; only the span between them is a deck."""
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True)])
+        assert G.nodes[1]["elevation"] == pytest.approx(30.0)
+        assert G.nodes[5]["elevation"] == pytest.approx(26.0)
+
+    def test_deck_grade_is_uniform(self):
+        """A deck slopes evenly — no fake dip-then-climb from the ground below."""
+        G = _build(self.DECK_NODES, [_way(10, [1, 2, 3, 4, 5], is_bridge=True)])
+        grades = [G[a][b]["grade"] for a, b in ((1, 2), (2, 3), (3, 4), (4, 5))]
+        assert all(g < 0 for g in grades), f"Deck drops 30 m → 26 m throughout, got {grades}"
+        assert grades == pytest.approx([grades[0]] * 4, rel=0.05)
+
+    def test_tunnel_interior_also_gets_deck_treatment(self):
+        """Tunnels have the same problem inverted: the DEM reads the hill above."""
+        nodes = [
+            _node(1, lat=37.75000, lon=-122.45, elevation=30.0),
+            _node(2, lat=37.75023, lon=-122.45, elevation=95.0),  # hillside overhead
+            _node(3, lat=37.75045, lon=-122.45, elevation=26.0),
+        ]
+        G = _build(nodes, [_way(10, [1, 2, 3], is_tunnel=True)])
+        assert G.nodes[2]["elevation"] == pytest.approx(28.0, abs=0.2)
+
+    def test_excluded_long_bridge_leaves_node_elevations_alone(self):
+        """A way dropped by the span filter must not rewrite elevations for other ways."""
+        nodes = [
+            _node(1, lat=37.750, lon=-122.45, elevation=30.0),
+            _node(2, lat=37.760, lon=-122.45, elevation=5.0),   # ~1.1 km in: real ground
+            _node(3, lat=37.770, lon=-122.45, elevation=26.0),
+        ]
+        ways = [
+            _way(10, [1, 2, 3], is_bridge=True),          # ~2.2 km — over the span filter
+            _way(11, [1, 2, 3], highway="residential"),   # the surface road alongside
+        ]
+        G = _build(nodes, ways)
+        assert G.nodes[2]["elevation"] == pytest.approx(5.0)
+
+    def test_two_node_bridge_is_unchanged(self):
+        """The common case — a single span with no shape points — has no interior."""
+        n1 = _node(1, lat=37.750, lon=-122.45, elevation=20.0)
+        n2 = _node(2, lat=37.7505, lon=-122.45, elevation=18.0)
+        G = _build([n1, n2], [_way(10, [1, 2], is_bridge=True)])
+        assert G.has_edge(1, 2)
+        assert G.nodes[1]["elevation"] == pytest.approx(20.0)
+        assert G.nodes[2]["elevation"] == pytest.approx(18.0)
 
 
 # ── Normal edge construction ───────────────────────────────────────────────────
@@ -268,3 +370,22 @@ class TestNodeTagging:
         G = _build(nodes, ways)
         assert not G.nodes[2].get("is_peak")
         assert not G.nodes[2].get("is_valley")
+
+
+# ── Trail difficulty ──────────────────────────────────────────────────────────
+
+def test_edges_carry_trail_difficulty():
+    """The route field is built by reading this off the edges, so it has to survive
+    graph construction — including onto the reverse edge of a two-way trail."""
+    nodes = [_node(1, 37.75, -122.45), _node(2, 37.751, -122.45)]
+    G = _build(nodes, [_way(10, [1, 2], "path", trail_difficulty=4)])
+    assert G[1][2]["trail_difficulty"] == 4
+    assert G[2][1]["trail_difficulty"] == 4
+
+
+def test_untagged_ways_carry_a_null_difficulty_not_a_zero():
+    """None is "unknown"; 0 is "smooth doubletrack". Collapsing them would let every
+    untagged road claim the easiest grade on the scale."""
+    nodes = [_node(1, 37.75, -122.45), _node(2, 37.751, -122.45)]
+    G = _build(nodes, [_way(10, [1, 2], "residential")])
+    assert G[1][2]["trail_difficulty"] is None

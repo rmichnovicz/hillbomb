@@ -25,7 +25,12 @@ import networkx as nx
 import pytest
 
 from ..config import RIDER_PROFILES, SearchConfig, Toggles
-from ..pathfinding import _CANCEL_CHECK_INTERVAL, _speed_at_node, find_routes
+from ..pathfinding import (
+    _CANCEL_CHECK_INTERVAL,
+    _speed_at_node,
+    build_route_from_data,
+    find_routes,
+)
 from ..types import OSMNode
 
 # ── Graph-building helpers ────────────────────────────────────────────────────
@@ -994,6 +999,20 @@ def test_route_elevations_match_nodes():
         assert elev == pytest.approx(nodes[nid].elevation, abs=1e-3)
 
 
+def test_route_elevations_come_from_the_graph_not_the_raw_node():
+    """build_graph corrects bridge/tunnel interiors, where the DEM read the ground
+    under the deck. Pathfinding ranks on those corrected values, so the emitted
+    profile has to use them too rather than re-reading the raw OSM node."""
+    G, nodes = _linear_graph(4)
+    G.nodes[2]["elevation"] = nodes[2].elevation + 12.0  # stand-in for a deck correction
+    routes = _run(G, nodes)
+    assert routes
+    r = routes[0]
+    assert 2 in r.node_ids
+    elev_by_id = dict(zip(r.node_ids, r.elevations))
+    assert elev_by_id[2] == pytest.approx(G.nodes[2]["elevation"], abs=1e-3)
+
+
 def test_route_total_descent_is_nonnegative():
     G, nodes = _linear_graph(4)
     routes = _run(G, nodes)
@@ -1187,3 +1206,53 @@ def test_never_cancelling_matches_no_predicate():
                                  RIDER_PROFILES["longboarder"], Toggles(),
                                  should_cancel=lambda: False))
     assert [r.node_ids for r in with_pred] == [r.node_ids for r in baseline]
+
+
+# ── Trail difficulty on the finished route ────────────────────────────────────
+
+def _difficulty_graph(*grades):
+    """A straight chain of edges, one per grade in `grades` (None = untagged)."""
+    G = nx.DiGraph()
+    for i, _ in enumerate(grades):
+        G.add_node(i, lat=37.75 + i * 0.001, lon=-122.45, elevation=100.0 - i)
+    G.add_node(len(grades), lat=37.75 + len(grades) * 0.001, lon=-122.45,
+               elevation=100.0 - len(grades))
+    for i, d in enumerate(grades):
+        G.add_edge(i, i + 1, distance_m=100.0, grade=-0.05, highway="path",
+                   surface="dirt", way_name="Test Trail", trail_difficulty=d)
+    return G
+
+
+def test_route_difficulty_is_the_hardest_segment():
+    """Max, not mean: one S4 rock roll is what gates who can ride the whole thing."""
+    G = _difficulty_graph(1, 4, 2)
+    route = build_route_from_data(
+        [0, 1, 2, 3], [[0, 0]] * 4, [100.0, 99.0, 98.0, 97.0], [100.0] * 3, G,
+    )
+    assert route.trail_difficulty == 4
+
+
+def test_route_difficulty_ignores_untagged_segments():
+    """A tagged S3 route doesn't become unknown because one segment lacks the tag."""
+    G = _difficulty_graph(None, 3, None)
+    route = build_route_from_data(
+        [0, 1, 2, 3], [[0, 0]] * 4, [100.0, 99.0, 98.0, 97.0], [100.0] * 3, G,
+    )
+    assert route.trail_difficulty == 3
+
+
+def test_route_difficulty_is_none_when_nothing_is_tagged():
+    G = _difficulty_graph(None, None)
+    route = build_route_from_data(
+        [0, 1, 2], [[0, 0]] * 3, [100.0, 99.0, 98.0], [100.0] * 2, G,
+    )
+    assert route.trail_difficulty is None
+
+
+def test_zero_difficulty_survives_as_zero():
+    """`0` is a real grade (smooth doubletrack) and must not fall to None via falsiness."""
+    G = _difficulty_graph(0, 0)
+    route = build_route_from_data(
+        [0, 1, 2], [[0, 0]] * 3, [100.0, 99.0, 98.0], [100.0] * 2, G,
+    )
+    assert route.trail_difficulty == 0

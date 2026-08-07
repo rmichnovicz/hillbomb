@@ -1,0 +1,49 @@
+# What `gcloud run deploy --source .` uploads to Cloud Build.
+#
+# This is a SEPARATE mechanism from .dockerignore. .dockerignore trims what the
+# docker daemon sees as build context; .gcloudignore trims what gcloud uploads in
+# the first place. Without this file gcloud falls back to .gitignore, which meant
+# the whole test suite, its fixtures and every doc were being shipped to the build.
+#
+# Keep in step with .dockerignore. Anything the image needs at build time must NOT
+# be listed here — in particular backend/, frontend/ and backend/data/collections.json.
+
+.git
+.gitignore
+**/.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+frontend/dist
+static
+
+# Tests, fixtures and dev tooling — the image does not run them.
+backend/tests
+backend/scripts/bench_elevation.py
+pytest.ini
+.claude
+
+# Local artifacts and scratch output.
+backend/_cache_twins.pkl
+routes.geojson
+**/.cache
+.DS_Store
+
+# Docs and planning notes.
+docs
+*.md
+Sick Slopes.zip
+_unzipped
+cpp
+
+# Local road-network snapshots (data/). The `all`-tier GOL built for local dev is
+# ~820 MB and must never reach the build: it would be uploaded to Cloud Build on
+# every deploy and, if it landed in the image, would ship 34 regions' worth of
+# cold-start pull time. Only the deploy-tier file is allowed through.
+#
+# Note the ordering: exclude everything in data/, then re-admit the deploy GOL,
+# its manifest, and the .keep sentinel the Dockerfile's COPY needs.
+data/*
+!data/.keep
+!data/hillbomb-deploy.gol
+!data/hillbomb-deploy.gol.regions.json
