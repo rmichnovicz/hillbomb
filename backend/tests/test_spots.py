@@ -11,6 +11,8 @@ What these CAN'T check is whether a bbox actually contains its road, or whether
 which fails loudly and specifically when it doesn't.
 """
 
+import re
+
 import pytest
 
 from ..config import DISCIPLINES, HIGHWAY_RANK, RIDER_PROFILES, SURFACE_CATEGORIES
@@ -111,6 +113,24 @@ def test_blurb_is_short(spot: Spot):
     assert len(spot.blurb) <= BLURB_MAX_CHARS, (
         f"{spot.slug}: blurb is {len(spot.blurb)} chars, over the {BLURB_MAX_CHARS} cap. "
         f"Cut it to where it is + what the descent is like; move caveats to `notes`."
+    )
+
+
+_INTERNAL_NOTE_LANGUAGE = re.compile(
+    r"\b(?:OSM|bbox|max_road_rank|pipeline|build(?:s|ing)?|tagged|untagged)\b|"
+    r"\b(?:surface|highway|oneway)=[a-z]",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("spot", SPOTS, ids=lambda s: s.slug)
+def test_notes_are_user_facing(spot: Spot):
+    """Rider-visible notes must describe the ride, not collection internals."""
+    match = _INTERNAL_NOTE_LANGUAGE.search(spot.notes)
+    assert match is None, (
+        f"{spot.slug}: notes expose internal language {match.group()!r}; describe the "
+        "riding condition or how the route appears instead. Mention map data only when "
+        "its accuracy is the caveat."
     )
 
 

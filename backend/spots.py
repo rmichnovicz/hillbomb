@@ -446,8 +446,8 @@ SPOTS: list[Spot] = [
         ),
         notes=(
             "Blind switchbacks, driveways straight onto the road, and no run-out at the "
-            "bottom. Half the ways are untagged for surface; it is asphalt, patched and "
-            "broken in places. Going down is harder than going up."
+            "bottom. The asphalt is patched and broken in places. Going down is harder "
+            "than going up."
         ),
         confidence="high",
     ),
@@ -1038,9 +1038,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "skate"),
         notes=(
-            "Closed to motor traffic and tagged highway=cycleway, so the descent has no "
-            "cars — but it is shared with walkers and runners all day, and it is gentle "
-            "rather than steep."
+            "Closed to motor traffic, so the descent has no cars — but it is shared with "
+            "walkers and runners all day, and it is gentle rather than steep."
         ),
         confidence="medium",
     ),
@@ -1201,9 +1200,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "gravel"),
         notes=(
-            "Ferry-only access. Surface is untagged in OSM; on the ground it is chip "
-            "seal with loose gravel at the margins. The steep section is short and the "
-            "rest rolls, so the numbers will read gentler than the road feels."
+            "Ferry-only access. Chip seal with loose gravel at the margins. The steep "
+            "section is short and the rest rolls, so the numbers will read gentler than "
+            "the road feels."
         ),
         confidence="low",
     ),
@@ -1296,9 +1295,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Renamed from Mount Evans Road in 2023; OSM carries the new name. Gated "
-            "above Echo Lake from roughly October to Memorial Day, and the open season "
-            "runs on timed-entry reservations. No guardrail above treeline, and "
+            "Renamed from Mount Evans Road in 2023. Gated above Echo Lake from roughly "
+            "October to Memorial Day, and the open season runs on timed-entry "
+            "reservations. No guardrail above treeline, and "
             "afternoon thunderstorms arrive fast at 14,000 ft."
         ),
         confidence="medium",
@@ -1316,9 +1315,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "The OSM name is one word, 'Lefthand'. A secondary road and the only "
-            "access to Ward, Jamestown and Gold Hill, so expect real traffic; the "
-            "lower narrows have no shoulder, and the canyon collects sand and "
+            "The only access to Ward, Jamestown and Gold Hill, so expect real traffic; "
+            "the lower narrows have no shoulder, and the canyon collects sand and "
             "rockfall after storms."
         ),
         confidence="medium",
@@ -1336,10 +1334,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "gravel"),
         notes=(
-            "Two of the six ways are surface=compacted — the upper canyon above "
-            "Poorman Road is graded dirt and washboards badly. The paved lower half "
-            "is steep and narrow with blind corners, and it is a residential street "
-            "at the bottom."
+            "The upper canyon above Poorman Road is graded dirt and washboards badly. "
+            "The paved lower half is steep and narrow with blind corners, and it is a "
+            "residential street at the bottom."
         ),
         confidence="medium",
     ),
@@ -1359,7 +1356,6 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "The OSM name is 'Magnolia Drive', not the 'Magnolia Road' everyone says. "
             "Steep and sustained enough to cook rim brakes, with a sheer drop off the "
             "outside of several corners and no runoff."
         ),
@@ -1385,7 +1381,7 @@ SPOTS: list[Spot] = [
             stay_on_initial_road=False,   # South Deer Creek Canyon Rd → West Deer Creek Canyon Rd
         ),
         notes=(
-            "Two OSM names for one canyon; the change is at the Phillips 66 junction. "
+            "The road changes name at the Phillips 66 junction. "
             "Popular enough that uphill riders are constant, and the lower canyon "
             "carries commuter traffic to the Ken Caryl subdivisions."
         ),
@@ -1691,7 +1687,7 @@ SPOTS: list[Spot] = [
         notes=(
             "Shuttled or reached off the Mount Rose Highway; the bottom drops you at "
             "the ski area. Rebuilt and rerouted by TAMBA in recent years, so the "
-            "OSM line may lag the trail on the ground. Snowbound until roughly June."
+            "mapped line may lag the trail on the ground. Snowbound until roughly June."
         ),
         confidence="medium",
     ),
@@ -1757,8 +1753,8 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "Distinct in OSM from 'Washington Gulch Road', the dirt road in the same "
-            "valley. Starts above 11,000 ft and holds snow into July. Narrow "
+            "This is the singletrack, not Washington Gulch Road in the same valley. "
+            "Starts above 11,000 ft and holds snow into July. Narrow "
             "off-camber bench with a steep hillside below it, ridden both directions."
         ),
         confidence="medium",
@@ -1927,8 +1923,8 @@ SPOTS: list[Spot] = [
         rider_profile="gravel",
         notes=(
             "Dirt and ledge rock shared with 4x4 traffic, one lane in the slot with "
-            "nowhere to pass. Impassable when wet. Distinct in OSM from 'Long Canyon "
-            "Well Road' nearby."
+            "nowhere to pass. Impassable when wet. Not to be confused with Long Canyon "
+            "Well Road nearby."
         ),
         confidence="medium",
     ),
@@ -1953,7 +1949,7 @@ SPOTS: list[Spot] = [
             stay_on_initial_road=False,   # Upper Captain Ahab Trail → Lower Captain Ahab Trail
         ),
         notes=(
-            "The lower half is tagged one-way, and the direction is downhill. "
+            "The lower half is one-way downhill. "
             "Mandatory ledge moves with exposure on the outside, and no shade or "
             "water anywhere on it."
         ),
@@ -1994,8 +1990,8 @@ SPOTS: list[Spot] = [
         notes=(
             "Half of it is the Sand Flats Recreation Area access road, so there is a "
             "fee station and constant 4x4 and shuttle traffic. Loose sand over "
-            "slickrock in the middle section; the two one-way ways are a short "
-            "divided stretch, not a restriction on the descent."
+            "slickrock in the middle section; the short one-way section is a divided "
+            "stretch, not a restriction on the descent."
         ),
         confidence="medium",
     ),
@@ -2094,9 +2090,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "OSM splits Sycamore into East and West; the Dirty Dozen hill is the East "
-            "half, which is what this matches. Tagged `tertiary` with real traffic, and "
-            "the run-out is into the P.J. McArdle / Liberty Bridge junctions."
+            "The Dirty Dozen hill is the East Sycamore half. It carries real traffic, "
+            "and the run-out is into the P.J. McArdle / Liberty Bridge junctions."
         ),
         confidence="high",
     ),
@@ -2116,8 +2111,8 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "A Dirty Dozen hill, and far steeper than 10 m elevation data can show. The "
-            "named ways have a gap part way down, so it may build as two runs rather "
-            "than one. Residential the whole way, with cross streets and parked cars."
+            "map has a gap part way down, so it may appear as two runs rather than one. "
+            "Residential the whole way, with cross streets and parked cars."
         ),
         confidence="medium",
     ),
@@ -2134,9 +2129,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "\"Logan Street\" appears all over the metro; only the bbox separates this "
-            "one. Narrow residential street, and the bottom lands in Millvale's grid a "
-            "block from Route 28."
+            "Narrow residential street, and the bottom lands in Millvale's grid a block "
+            "from Route 28."
         ),
         confidence="medium",
     ),
@@ -2172,8 +2166,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "One OSM way, 350 m end to end, so this is a one-block bomb rather than a "
-            "descent. Around the corner from Canton Avenue, which is deliberately not "
+            "Only 350 m end to end, so this is a one-block bomb rather than a descent. "
+            "Around the corner from Canton Avenue, which is deliberately not "
             "in this collection — its steep block is one-way uphill."
         ),
         confidence="medium",
@@ -2236,9 +2230,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "The OSM name drops 'Canyon': the way is 'Little Cottonwood Road'. Heavy "
-            "resort traffic, frequent avalanche closures in winter, and a watershed "
-            "canyon so no dogs. The gradient near the mouth is the steep part."
+            "Heavy resort traffic, frequent avalanche closures in winter, and a "
+            "watershed canyon so no dogs. The gradient near the mouth is the steep part."
         ),
         confidence="medium",
     ),
@@ -2255,8 +2248,7 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Distinct in OSM from 'Millcreek Canyon Road', the one-word way at the "
-            "bottom. The upper road above Maple Grove is gated closed by snow from "
+            "The upper road above Maple Grove is gated closed by snow from "
             "roughly November to July. Dogs run off-leash on odd-numbered days, and "
             "there is a fee station at the mouth."
         ),
@@ -2275,10 +2267,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "gravel"),
         notes=(
-            "'Skyline Drive' is a generic OSM name — the bbox is what pins this to "
-            "the Bountiful road, and a 25 m stub called 'East Skyline Drive North' "
-            "shares the substring. Steep enough for the whole run that brakes will "
-            "fade; the top turns to gravel, and the Forest Service gate is closed by "
+            "Steep enough for the whole run that brakes will fade; the top turns to "
+            "gravel, and the Forest Service gate is closed by "
             "snow from about November to June."
         ),
         confidence="medium",
@@ -2318,8 +2308,8 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "Tagged one-way downhill on all nine ways, and the direction is correct. "
-            "Steep, loose and badly eroded, with blind rollers and a few built jumps; "
+            "One-way downhill. Steep, loose and badly eroded, with blind rollers and a "
+            "few built jumps; "
             "the line has been rebuilt and re-routed repeatedly, so what is on the "
             "ground may not match the map."
         ),
@@ -2565,8 +2555,8 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "The steepest pitch in Austin and a fixture of the Tour das Hügel. Very "
-            "short, residential, with driveways on both sides. Its bbox sits inside "
-            "Ladera Norte's — the two walls are a block apart."
+            "short, residential, with driveways on both sides. Ladera Norte is one "
+            "block away."
         ),
         confidence="medium",
     ),
@@ -2663,8 +2653,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "The DCR access road up Great Blue Hill, tagged `service`. Closed to public "
-            "motor traffic but open to bikes and busy with walkers, so treat it as a "
+            "The DCR access road up Great Blue Hill is closed to public motor traffic "
+            "but open to bikes and busy with walkers, so treat it as a "
             "shared path rather than a clear road."
         ),
         confidence="medium",
@@ -2685,7 +2675,8 @@ SPOTS: list[Spot] = [
         notes=(
             "A designated mountain-bike trail west of Route 28, where riding is legal; "
             "the Skyline Trail and everything east of Route 28 is not. Closed to bikes "
-            "for the month of March. OSM has a gap mid-trail, so it may build as two runs."
+            "for the month of March. The map has a gap mid-trail, so it may appear as "
+            "two runs."
         ),
         confidence="medium",
     ),
@@ -2702,9 +2693,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Low average gradient: this is a fast rolling road, not a wall. Tagged "
-            "`secondary` with real traffic and no shoulder, and it crosses Route 28 "
-            "part way along."
+            "Low average gradient: this is a fast rolling road, not a wall. It carries "
+            "real traffic, has no shoulder, and crosses Route 28 part way along."
         ),
         confidence="medium",
     ),
@@ -2843,9 +2833,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Tagged 'West Gates Pass Road' in OSM. Two lanes, no shoulder, and a tight "
-            "limit through the pass itself; the sunset pullouts fill with cars that "
-            "turn without looking."
+            "Two lanes, no shoulder, and a tight limit through the pass itself; the "
+            "sunset pullouts fill with cars that turn without looking."
         ),
         confidence="high",
     ),
@@ -2902,7 +2891,7 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "Narrow with no shoulder and heavy weekend trailhead traffic. Forest "
-            "Service fee area. The very top of the canyon is trimmed by the bbox."
+            "Service fee area. This route starts just below the top of the canyon."
         ),
         confidence="medium",
     ),
@@ -2973,9 +2962,8 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         max_road_rank=7,
         notes=(
-            "OSM names this 'Prescott–Flagstaff Highway' and tags it primary, which is "
-            "why it needs max_road_rank 7. A two-lane state highway with no shoulder "
-            "through the canyon, tight switchbacks and constant tourist traffic."
+            "A two-lane state highway with no shoulder through the canyon, tight "
+            "switchbacks and constant tourist traffic."
         ),
         confidence="medium",
     ),
@@ -3089,8 +3077,7 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "One-way, fee entry, timed-entry reservations most of the year, and a gate "
-            "that closes at dusk. 'Scenic Drive' is a generic OSM name and only this "
-            "bbox distinguishes it. Slow tourist traffic in a narrow lane."
+            "that closes at dusk. Slow tourist traffic in a narrow lane."
         ),
         confidence="medium",
     ),
@@ -3129,7 +3116,7 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "State route 156. Narrow shoulder, and chains-required conditions through "
-            "the winter. Clipped to the twelve kilometres that actually descend."
+            "the winter. This route covers the twelve kilometres that actually descend."
         ),
         confidence="medium",
     ),
@@ -3168,8 +3155,8 @@ SPOTS: list[Spot] = [
         rider_profile="gravel",
         notes=(
             "High-clearance dirt, rutted and loose, gated in winter, and empty enough "
-            "that nobody will find you. The reported top speed is the profile's "
-            "ceiling, not what this surface allows."
+            "that nobody will find you. Actual safe speed will be much lower than the "
+            "number shown."
         ),
         confidence="low",
     ),
@@ -3260,8 +3247,8 @@ SPOTS: list[Spot] = [
         disciplines=("gravel",),
         rider_profile="gravel",
         notes=(
-            "Tagged 'FS 150' in OSM, signed as Forest Road 150. Closed to cars, so it "
-            "is riders and walkers only — and it is mobbed in late September. Starts "
+            "Signed as Forest Road 150. Closed to cars, so it is riders and walkers "
+            "only — and it is mobbed in late September. Starts "
             "above 3,600 m; snow closes it in winter."
         ),
         confidence="medium",
@@ -3299,9 +3286,9 @@ SPOTS: list[Spot] = [
         disciplines=("road", "gravel"),
         rider_profile="gravel",
         notes=(
-            "Half asphalt and half gravel in OSM, which is why it builds on the gravel "
-            "profile. County road with light traffic, closed by snow at the top in "
-            "winter. A short divided stretch at the ski area is one-way each way."
+            "Half asphalt and half gravel. County road with light traffic, closed by "
+            "snow at the top in winter. A short divided stretch at the ski area is "
+            "one-way each way."
         ),
         confidence="medium",
     ),
@@ -3423,9 +3410,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "The switchback section east of the summit. The run ends at the edge of the "
-            "mapped section rather than at any natural feature. Remote, no services, "
-            "cattle guards, and strong crosswinds on the upper hairpins."
+            "This route covers the switchbacks east of the summit and stops before the "
+            "road naturally bottoms out. Remote, no services, cattle guards, and strong "
+            "crosswinds on the upper hairpins."
         ),
         confidence="high",
     ),
@@ -3464,8 +3451,7 @@ SPOTS: list[Spot] = [
         notes=(
             "Narrow park road with no shoulder, no trailers allowed, and tourist "
             "traffic pulling over for the overlooks. Closed by snow from about "
-            "November to May. Distinct in OSM from the Signal Mountain Trail "
-            "alongside it."
+            "November to May."
         ),
         confidence="medium",
     ),
@@ -3504,8 +3490,8 @@ SPOTS: list[Spot] = [
         rider_profile="mtb",
         notes=(
             "Two-way and rarely groomed: roots, creek crossings and deadfall early in "
-            "the season. Distinct in OSM from 'Phillips Pass Trail' and 'Phillips "
-            "Bench Road' above it. Grizzly country."
+            "the season. Not to be confused with Phillips Pass Trail or Phillips Bench "
+            "Road above it. Grizzly country."
         ),
         confidence="medium",
     ),
@@ -3552,8 +3538,7 @@ SPOTS: list[Spot] = [
         notes=(
             "Two-way, open to motorcycles, and the busiest trail in the Ridge to "
             "Rivers network. Closed when wet — the foothills clay ruts permanently. "
-            "The OSM name carries the trail number, and one of the eleven ways spells "
-            "it '#4 8th Street Motorcycle Trail'."
+            "Expect fast traffic in both directions."
         ),
         confidence="medium",
     ),
@@ -3571,9 +3556,9 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "One unbroken way, two-way traffic, and exposed with no water. Seasonal "
-            "closures apply in the foothills for winter range; check Ridge to Rivers "
-            "before riding it."
+            "A continuous descent with two-way traffic, exposed and with no water. "
+            "Seasonal closures apply in the foothills for winter range; check Ridge to "
+            "Rivers before riding it."
         ),
         confidence="medium",
     ),
@@ -3591,10 +3576,8 @@ SPOTS: list[Spot] = [
         disciplines=("gravel",),
         rider_profile="gravel",
         notes=(
-            "Unpaved the whole way, rutted and rocky in places, and shared with "
-            "motos and 4x4s. Two short spurs in the same bbox are named 'Old Boise "
-            "Ridge Road' and 'North Boise Ridge Road' and match the same substring. "
-            "Snow-closed in winter."
+            "Unpaved the whole way, rutted and rocky in places, and shared with motos "
+            "and 4x4s. Snow-closed in winter."
         ),
         confidence="low",
     ),
@@ -3611,9 +3594,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Paved for most of its length with one unpaved way; distinct in OSM from "
-            "'Harris Creek Summit Road', the gravel continuation. Narrow, no shoulder, "
-            "and gravel washes across the corners after rain."
+            "Paved for most of its length; the gravel continuation is Harris Creek "
+            "Summit Road. Narrow, no shoulder, and gravel washes across the corners "
+            "after rain."
         ),
         confidence="medium",
     ),
@@ -3678,8 +3661,7 @@ SPOTS: list[Spot] = [
         notes=(
             "MT-38, unpaved over the pass and sealed at both ends. No guardrail on "
             "the shelf section and blind corners with logging trucks on them. Closed "
-            "by snow from roughly late October to June. Distinct in OSM from "
-            "'Skalkaho Road', the paved section further east."
+            "by snow from roughly late October to June."
         ),
         confidence="medium",
     ),
@@ -3719,9 +3701,8 @@ SPOTS: list[Spot] = [
         rider_profile="mtb",
         notes=(
             "Two-way and open to motorcycles, which have cut ruts into the fall-line "
-            "sections. Three shorter ways in the same area are named 'Chestnut "
-            "Mountain', 'Chestnut Mountain Trail' and 'Chestnut Mountain Summit'; "
-            "the FS 458 name pins this to the long one."
+            "sections. This is the long FS 458 descent, not the shorter Chestnut "
+            "Mountain trails nearby."
         ),
         confidence="medium",
     ),
@@ -3740,9 +3721,9 @@ SPOTS: list[Spot] = [
         rider_profile="mtb",
         notes=(
             "Inside the Rattlesnake National Recreation Area, where bikes are allowed "
-            "but the wilderness above is closed to them — check the boundary. Two "
-            "ways, both untagged for difficulty. Distinct from 'Sheep Mountain Loop' "
-            "and 'Sheep Mountain Cutoff' in the same drainage."
+            "but the wilderness above is closed to them — check the boundary. The map "
+            "does not record a difficulty. Not to be confused with Sheep Mountain Loop "
+            "or Sheep Mountain Cutoff in the same drainage."
         ),
         confidence="low",
     ),
@@ -3938,8 +3919,8 @@ SPOTS: list[Spot] = [
             stay_on_initial_road=False,
         ),
         notes=(
-            "OSM calls the west side Gap Road and the east side Brandon Mountain Road; "
-            "both are VT 73. The west descent is the steeper of the two. Peregrine "
+            "VT 73 is Gap Road on the west side and Brandon Mountain Road on the east. "
+            "The west descent is the steeper of the two. Peregrine "
             "closures affect the cliff, not the road."
         ),
         confidence="high",
@@ -3957,9 +3938,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "gravel"),
         notes=(
-            "OSM spells the way \"Roxburry Mountain Road\" — the misspelling is the "
-            "actual tag, not a typo here. The Warren side is asphalt; the Roxbury side "
-            "is dirt and washes out badly in mud season."
+            "The map misspells the road as \"Roxburry Mountain Road.\" The Warren side "
+            "is asphalt; the Roxbury side is dirt and washes out badly in mud season."
         ),
         confidence="medium",
     ),
@@ -4059,8 +4039,8 @@ SPOTS: list[Spot] = [
         disciplines=("gravel",),
         rider_profile="gravel",
         notes=(
-            "Tagged `service` and `surface=gravel`. Single lane, rough, and used by "
-            "hikers walking to the summit. Short — about 1.8 km — and seasonal."
+            "Single-lane gravel, rough, and used by hikers walking to the summit. Short "
+            "— about 1.8 km — and seasonal."
         ),
         confidence="medium",
     ),
@@ -4119,9 +4099,8 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         max_road_rank=7,
         notes=(
-            "Tagged `primary`, so it needs max_road_rank=7. A busy state highway in "
-            "summer and foliage season, with rock fall and frost heaves near the lakes. "
-            "The road is named \"State Highway 73\" in OSM, not \"NY 73\"."
+            "A busy state highway in summer and foliage season, with rock fall and "
+            "frost heaves near the lakes."
         ),
         confidence="high",
     ),
@@ -4194,9 +4173,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "One continuous OSM way, so it builds as a single run. Cars park along the "
-            "shoulder at the trailhead at the top, and the bottom drops straight into "
-            "Woodstock village traffic."
+            "Cars park along the shoulder at the trailhead at the top, and the bottom "
+            "drops straight into Woodstock village traffic."
         ),
         confidence="high",
     ),
@@ -4274,9 +4252,9 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         max_road_rank=7,
         notes=(
-            "Tagged `primary`, so it needs max_road_rank=7. A truck route with heavy "
-            "tourist traffic and a long sustained grade past the Willey House; the "
-            "shoulder narrows to nothing through the gate of the notch."
+            "A truck route with heavy tourist traffic and a long sustained grade past "
+            "the Willey House; the shoulder narrows to nothing through the gate of the "
+            "notch."
         ),
         confidence="high",
     ),
@@ -4296,7 +4274,7 @@ SPOTS: list[Spot] = [
         notes=(
             "Unpaved over the top and closed from roughly November to May. Dispersed "
             "camping along it means parked cars and pedestrians on blind corners in "
-            "summer. Expect it to build as more than one run where the surface changes."
+            "summer. Surface changes may split the descent into separate runs."
         ),
         confidence="high",
     ),
@@ -4522,8 +4500,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "Ridden as a loop, climbing one side and descending the other; OSM holds "
-            "the whole loop under one name, so the climbing half is in the box too. "
+            "Ridden as a loop, climbing one side and descending the other. "
             "Low enough to ride from March, and hot and dusty by August."
         ),
         confidence="medium",
@@ -4603,8 +4580,7 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         notes=(
             "Rural and rough, with gravel washed onto the corners, blind farm entrances "
-            "and no centerline for much of it. Surface is untagged in OSM; it is "
-            "pavement, in poor repair in places."
+            "and no centerline for much of it. The pavement is in poor repair in places."
         ),
         confidence="medium",
     ),
@@ -4679,7 +4655,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "Signed and tagged downhill-only, and the one-way direction really is down. "
+            "Signed downhill-only. "
             "BLM land, ridden year-round in the rain, so expect slick roots and standing "
             "water. The climb back up is on paved Forest Road 14."
         ),
@@ -4699,8 +4675,7 @@ SPOTS: list[Spot] = [
         disciplines=("road", "skate"),
         notes=(
             "Narrow, with parked cars, blind corners and no shoulder, and it arrives "
-            "straight into downtown traffic. Half the ways are untagged for surface; it "
-            "is asphalt."
+            "straight into downtown traffic. Asphalt throughout."
         ),
         confidence="medium",
     ),
@@ -5053,8 +5028,7 @@ SPOTS: list[Spot] = [
         rider_profile="gravel",
         notes=(
             "Unpaved and rough, with loose rock and no guardrail. Fords near the bottom "
-            "can be impassable after rain, and there are no services at Erbie. Tagged "
-            "`residential` in OSM despite being a backcountry road."
+            "can be impassable after rain, and there are no services at Erbie."
         ),
         confidence="low",
     ),
@@ -5112,8 +5086,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "Directional: signed and tagged downhill-only, and the OSM one-way "
-            "direction is the descending one. Rock rolls, drops and berms in dirt. "
+            "Signed downhill-only. Rock rolls, drops and berms in dirt. "
             "Snow-covered from November."
         ),
         confidence="medium",
@@ -5310,8 +5283,8 @@ SPOTS: list[Spot] = [
         rider_profile="mtb",
         notes=(
             "TR 716, a National Recreation Trail and the spine of the Shenandoah "
-            "Mountain 100. It is a loop, so expect the pipeline to find the descending "
-            "halves rather than one continuous line. Remote, rocky and unsigned in places."
+            "Mountain 100. It is a loop, so expect separate descents rather than one "
+            "continuous run. Remote, rocky and unsigned in places."
         ),
         confidence="medium",
     ),
@@ -5329,7 +5302,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "TR 378, tagged open to bikes. Fast and rocky along the ridge, tighter and "
+            "TR 378 is open to bikes. Fast and rocky along the ridge, tighter and "
             "more technical in the last third. A long way from a road once committed."
         ),
         confidence="medium",
@@ -5348,7 +5321,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "FR 449 and 650, tagged open to bikes, and a Shenandoah Mountain 100 "
+            "FR 449 and 650 are open to bikes and form a Shenandoah Mountain 100 "
             "descent. Wet in the bottom of the draft year-round, with several crossings."
         ),
         confidence="medium",
@@ -5408,8 +5381,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Runs the spine of Gambrill State Park, so it rolls before it drops and may "
-            "build as several runs. Narrow, no centre line, and popular with hikers "
+            "Runs the spine of Gambrill State Park, so the rolling terrain may split the "
+            "descent into several runs. Narrow, no centre line, and popular with hikers "
             "crossing to the Catoctin Trail."
         ),
         confidence="high",
@@ -5427,9 +5400,8 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Two OSM ways end to end, so it builds as one long run. Single lane in "
-            "places, no centre line, and cars park along the top for the overlook. "
-            "The Appalachian Trail crosses near the bottom."
+            "Single lane in places, no centre line, and cars park along the top for the "
+            "overlook. The Appalachian Trail crosses near the bottom."
         ),
         confidence="high",
     ),
@@ -5465,7 +5437,7 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road", "gravel"),
         notes=(
-            "Part of the road is tagged `surface=dirt`, so expect a mixed run. Very "
+            "Part of the road is dirt, so expect a mixed-surface run. Very "
             "narrow, and it meets the old National Pike at the top where the through "
             "traffic is."
         ),
@@ -5485,9 +5457,9 @@ SPOTS: list[Spot] = [
         disciplines=("road",),
         max_road_rank=7,
         notes=(
-            "Tagged `primary`, so it needs max_road_rank=7. A truck route over the "
-            "ridge with a wide shoulder but fast traffic; the Appalachian Trail crosses "
-            "at the top. Modest average gradient over its full length."
+            "A truck route over the ridge with a wide shoulder but fast traffic; the "
+            "Appalachian Trail crosses at the top. Modest average gradient over its "
+            "full length."
         ),
         confidence="medium",
     ),
@@ -5505,8 +5477,8 @@ SPOTS: list[Spot] = [
         disciplines=("gravel",),
         rider_profile="gravel",
         notes=(
-            "State forest road, gravel on every way, shared with hunters' trucks in "
-            "season and with the endurance races Michaux is known for. No services and "
+            "State forest road, gravel throughout, shared with hunters' trucks in season "
+            "and with the endurance races Michaux is known for. No services and "
             "patchy phone coverage."
         ),
         confidence="medium",
@@ -5599,9 +5571,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Signed as Clingmans Dome Road until the 2024 renaming; OSM carries the new "
-            "name. Closed to cars from December into spring, which is when the descent "
-            "is best. Fog and ice are common on the ridge."
+            "Signed as Clingmans Dome Road until the 2024 renaming. Closed to cars from "
+            "December into spring, which is when the descent is best. Fog and ice are "
+            "common on the ridge."
         ),
         confidence="medium",
     ),
@@ -5638,7 +5610,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "TR 127, tagged open to bikes along its whole length here. Steep slab and "
+            "TR 127 is open to bikes along its whole length here. Steep slab and "
             "root sections that hold water; ride it dry. Hikers on the lower half near "
             "the ranger station."
         ),
@@ -5747,9 +5719,9 @@ SPOTS: list[Spot] = [
         ),
         disciplines=("road",),
         notes=(
-            "Paved but untagged as such in OSM. No shoulder and no centerline in "
-            "places, and it is one of the standard local climbs, so expect riders "
-            "coming up while you are coming down."
+            "Paved, with no shoulder and no centerline in places. It is one of the "
+            "standard local climbs, so expect riders coming up while you are coming "
+            "down."
         ),
         confidence="medium",
     ),
@@ -5830,7 +5802,7 @@ SPOTS: list[Spot] = [
         disciplines=("mtb",),
         rider_profile="mtb",
         notes=(
-            "TR 208, tagged open to bikes and ridden downhill in practice. Exposed "
+            "TR 208 is open to bikes and ridden downhill in practice. Exposed "
             "switchbacks, roots and loose rock; no water and no bail-out once you drop "
             "in. The separately named Lower Heartbreak Ridge is a different trail and "
             "is outside this box."
@@ -5851,8 +5823,8 @@ SPOTS: list[Spot] = [
         disciplines=("gravel", "road"),
         rider_profile="gravel",
         notes=(
-            "Mixed asphalt, gravel and unpaved over 11 km, so it may build as more "
-            "than one run rather than a single line. Residential at the bottom end "
+            "Mixed asphalt, gravel and unpaved over 11 km, so surface changes may split "
+            "the descent into separate runs. Residential at the bottom end "
             "with driveways and blind entries."
         ),
         confidence="medium",
