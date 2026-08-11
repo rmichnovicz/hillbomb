@@ -43,7 +43,7 @@ cpp
 #
 # Note the ordering: exclude everything in data/, then re-admit the deploy GOL,
 # its manifest, and the .keep sentinel the Dockerfile's COPY needs.
-data/*
-!data/.keep
-!data/hillbomb-deploy.gol
-!data/hillbomb-deploy.gol.regions.json
+/data/*
+!/data/.keep
+!/data/hillbomb-deploy.gol
+!/data/hillbomb-deploy.gol.regions.json
