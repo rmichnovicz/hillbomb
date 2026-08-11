@@ -30,6 +30,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
+  // Every test boots a MapLibre instance and pulls tiles and fonts from the live
+  // openfreemap CDN, so workers contend for network, not CPU — Playwright's default of
+  // half the cores overshoots badly. At 6 the suite lost three tests a run to timeouts
+  // that all passed in isolation; at 3 it is stable and no slower in wall-clock.
+  workers: process.env.CI ? 2 : 3,
   reporter: process.env.CI ? 'list' : [['list'], ['html', { open: 'never' }]],
 
   use: {

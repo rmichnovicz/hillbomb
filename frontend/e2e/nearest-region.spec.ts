@@ -49,10 +49,14 @@ test.describe('nearest region from IP', () => {
     await page.goto('/')
 
     await expect(sheetLabel(page)).toContainText(/\d+ descents in San Francisco Bay Area/)
-    // Collections, not Search — that is what puts the region's lines on the map.
-    await expect(page.getByRole('tab', { name: 'Collections' })).toHaveAttribute('aria-selected', 'true')
-    // And the sheet stays shut: the map keeps the screen.
+    // The sheet stays shut: the map keeps the screen.
     await expect(page.getByRole('button', { name: 'Expand panel' })).toBeVisible()
+
+    // Collections, not Search — that is what puts the region's lines on the map. Asserted
+    // after opening the sheet because a collapsed one is 52px of handle and label, with
+    // no room for a tab bar; it isn't rendered until there is somewhere to put it.
+    await page.getByRole('button', { name: 'Expand panel' }).click()
+    await expect(page.getByRole('tab', { name: 'Collections' })).toHaveAttribute('aria-selected', 'true')
   })
 
   test('a different location opens a different region', async ({ page }) => {
@@ -129,7 +133,9 @@ test.describe('nearest region from IP', () => {
 
     // Falls back to the generic prompt, and stays on Search — exactly as before any
     // of this existed.
-    await expect(sheetLabel(page)).toContainText('Tap to open search')
+    await expect(sheetLabel(page)).toContainText('Rider setup & filters')
+    // Tabs only exist once the sheet is open — see the SF case above.
+    await page.getByRole('button', { name: 'Expand panel' }).click()
     await expect(page.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true')
   })
 
@@ -138,23 +144,23 @@ test.describe('nearest region from IP', () => {
     await stubWhere(page, null)
     await page.goto('/')
 
-    await expect(sheetLabel(page)).toContainText('Tap to open search')
+    await expect(sheetLabel(page)).toContainText('Rider setup & filters')
   })
 
-  test('desktop does not spend the region fetch until the tab is opened', async ({ page }) => {
-    const spotFetches: string[] = []
-    page.on('request', req => {
-      const u = req.url()
-      if (u.includes('/collections/') && !u.includes('index.json')) spotFetches.push(u)
-    })
-
+  test('desktop lands on Collections with the region already open', async ({ page }) => {
     await stubWhere(page, SF)
     await page.goto('/')
-    await expect(page.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true')
-    expect(spotFetches, 'desktop prefetched a region before the tab was opened').toEqual([])
 
-    // Opening the tab then finds the region already chosen.
-    await page.getByRole('tab', { name: 'Collections' }).click()
+    await expect(page.getByRole('tab', { name: 'Collections' }))
+      .toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('button', { name: /San Francisco Bay Area/ })).toBeVisible()
+  })
+
+  test('desktop miss stays on Search', async ({ page }) => {
+    await stubWhere(page, WICHITA)
+    await page.goto('/')
+
+    await expect(page.getByRole('tab', { name: 'Search' }))
+      .toHaveAttribute('aria-selected', 'true')
   })
 })

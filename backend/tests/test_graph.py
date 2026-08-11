@@ -360,6 +360,36 @@ class TestNodeTagging:
         G = _build(nodes, ways)
         assert G.nodes[2].get("is_valley"), "Node 2 should be tagged as valley"
 
+    def test_sparse_node_on_a_sustained_descent_is_not_a_valley(self):
+        """The Marin Avenue bug: a node whose next downhill neighbour is beyond the
+        search radius is the lowest thing in the circle, but the road keeps dropping.
+
+        Node 2 sits 8 m below the only other node within 75 m (node 1, uphill on a
+        cross street), so the geometric test calls it a valley. Node 3 is 200 m
+        further down the same road and 20 m lower — the descent is not over, and
+        flagging it here truncates the run.
+        """
+        nodes = [
+            _node(1, 37.7500, -122.45, elevation=28.0),
+            _node(2, 37.7504, -122.45, elevation=20.0),
+            _node(3, 37.7522, -122.45, elevation=0.0),   # ~200 m on, well outside r
+        ]
+        G = _build(nodes, [_way(1, [1, 2, 3])])
+        assert not G.nodes[2].get("is_valley"), (
+            "Node 2 still has an 11% edge running downhill out of it"
+        )
+
+    def test_valley_survives_when_the_road_only_climbs_out(self):
+        """The veto must not disarm valley detection generally: with the onward edge
+        climbing, node 2 is a real bottom even though its neighbours are far away."""
+        nodes = [
+            _node(1, 37.7500, -122.45, elevation=28.0),
+            _node(2, 37.7504, -122.45, elevation=20.0),
+            _node(3, 37.7522, -122.45, elevation=40.0),  # climbs away
+        ]
+        G = _build(nodes, [_way(1, [1, 2, 3])])
+        assert G.nodes[2].get("is_valley")
+
     def test_flat_nodes_not_tagged_peak_or_valley(self):
         nodes = [
             _node(1, 37.7500, -122.45, elevation=10.0),

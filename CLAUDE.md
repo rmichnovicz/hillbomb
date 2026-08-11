@@ -183,7 +183,62 @@ map height, read from the live container at fit time so rotation needs no bookke
 only the open sheet counts, since collapsed it is 52px and already fits inside the 60px
 base padding.
 
-`e2e/nearest-region.spec.ts` covers this, stubbing `/api/where` by route interception —
+**The sheet has three detents** — `peek` (52px), `half` (65dvh) and `full` (92dvh), in
+`SHEET_DETENTS`. Tapping the handle cycles forward through them; dragging it snaps to the
+nearest, or moves exactly one stop on a flick. `full` exists because the list was the one
+thing this sheet was worst at: on a 390×844 phone the list scroller goes 165px → 388px,
+and the sheet body stops needing to scroll at all, so the nested-scroller problem below
+simply stops existing at that height. Cycling rather than toggling is what keeps `full`
+reachable from a keyboard, where Enter produces a click and no pointer events.
+
+Three *discrete* stops, not free-drag: `fitBottomInset` has to know how much map the
+sheet covers, and a snapped detent makes that a lookup instead of a per-frame recompute.
+The inset is capped at `half`'s figure — at `full` the map is a 60px strip, and asking a
+fit to frame a route inside it zooms all the way out, which reads as the map lurching
+away. `useSheetDrag` is bound to the handle only; drag-anywhere would have to arbitrate
+against two nested scrollers through momentum, for no gain over where thumbs already go.
+It swallows the `click` that follows a real drag — without that, every drag settles on a
+detent and then immediately cycles off it.
+
+**Everything below the tabs except the list is `flexShrink: 0`** — the 190px profile
+chart, rider settings, the search controls. So at `half` and below, the list column is
+charged the entire overflow, and there is no window short enough for that to stop being
+true. In a 480px-tall window, selecting a route collapsed it to 23px with 213px clipped:
+the spot header, the back button and every route card gone, with no way out of the spot.
+
+Four things keep it usable, and the split between them is the point. **Reachability:**
+`MOBILE_LIST_MIN_PX` floors the column and lets the *sheet body* scroll past that point.
+**Usable size:** that floor is spent from the inside before a card is drawn, so the spot
+header is two lines rather than three (the third repeated the region the back button
+already names), the blurb and notes moved out of the pinned header into `RouteList`'s
+`listHeader` where they scroll with the cards, and the notes clamp to two lines behind a
+More toggle. A five-line hazard note at the top of the column is the same bug in a
+politer form — you open a descent and see no descents.
+
+**What was tried and rejected: letting it all flow in one scroller.** It reads beautifully
+on a spot with three lines and falls apart on a search with fourteen — the chart and the
+"Search this area" button end up ~1000px down the list, where they had been one tap. If
+you are tempted again, measure the search tab with a full result set before the
+collections tab with one spot. Anything new and tall added to the sheet has to pick a
+side: pinned and short, or in the list's scroll flow.
+
+The tab bar is *not* rendered while the sheet is collapsed. It is 44 of the collapsed
+sheet's 52px, which leaves the summary label nothing and the body zero height — every
+child unreachable rather than merely clipped.
+
+The collapsed label names what is in the sheet and stops there. The `— tap to view`
+suffixes it used to carry were teaching an affordance the handle now has, on the one bar
+too narrow to spare the characters. The empty state is the one to keep honest: it read
+"Tap to open search" while the floating "Search this area" button sat directly above it,
+and tapping the sheet does not search — what is behind it is the rider setup.
+
+Relatedly, `RouteList` scrolls to the selected card with `scrollBy` on its own container
+rather than `scrollIntoView`, which walks *every* scrollable ancestor — including the
+sheet body, which put the header back off the top the moment you tapped a route.
+
+`e2e/short-viewport.spec.ts` guards all of this at 390×480; it has to be Playwright,
+since jsdom has no layout and reports every element as 0×0. `e2e/nearest-region.spec.ts`
+covers the region guess, stubbing `/api/where` by route interception —
 that endpoint exists only on the CDN, so it must be faked everywhere else. Read the
 comment there before adding a map-viewport assertion: the obvious ones all depend on the
 live openfreemap CDN and flake two runs in three alongside the rest of the suite.
@@ -204,7 +259,9 @@ The graph is a `nx.DiGraph` (directed). One-way streets have a single directed e
 
 **Lazy deletion**: each path has a `sequence_number` incremented on any state change. Queue entries with stale sequence numbers are discarded on pop.
 
-**Node cap**: `max_paths_per_node` (from `config.py`) limits active paths through a node. Counts active paths only; completed routes terminating at a node are not counted.
+**Node cap**: `max_paths_per_node` (from `config.py`) limits how many path lineages may pass through a node; the next one to arrive is finalized where it stands. The count is **cumulative over the search, not a census of live paths** — `node_path_count` is incremented on every fork and released only for a seed that gets skipped, so a lineage that finished half an hour of wall-clock ago still holds its slot. That is deliberate (it is what actually brakes branching; releasing on finalize would free the count almost immediately, since a path is deactivated the moment it forks), but it means the cap can end a descent in the middle of a road for no geographic reason once earlier lineages have used the node up. It was 3 and is now 4 for exactly that: at 3, Harris Creek Road shipped as 15.5 km plus two fragments, split on a 0.4% straight. Raising it costs ~5% search time and recovers nothing further past 4.
+
+A consequence worth knowing before you tune anything here: **which routes survive is order-dependent**, because a seed is discarded whenever any path has already touched its start node (`visited_nodes`), whether or not that path went on to become a route. Loosening the cap therefore does not monotonically improve results — Grizzly Gulch Trail's 1.5 km line disappears at *any* cap above 3, replaced by 500 m, because a competing lineage now reaches its seed node first and then dies. Judge a change here on the whole collection, not on the spot you were looking at.
 
 **Descent rule**: Prefer downhill edges. No hard uphill cap — the priority queue naturally deprioritizes paths that slow down on uphills via the arrival speed term. A path that crests a small rise with enough momentum will rank lower until it regains speed.
 
@@ -215,6 +272,8 @@ The graph is a `nx.DiGraph` (directed). One-way streets have a single directed e
 - Valley node reached
 
 Flat sections do not terminate a path — a route may include a flat connector between two steep drops.
+
+**A valley is a graph fact, not just a geometric one.** `graph.py` finds candidates the cheap way — a node at least `peak_min_elevation_delta_m` below everything within `peak_search_radius_m` — and that test alone is wrong in a specific, common way: it is trivially satisfied by any node whose next downhill neighbour is *further away than the radius*, because all that is left inside the circle is the cross-street corners on either side, sitting above it. So the flag is vetoed wherever a traversable edge still runs downhill out of the node. Marin Avenue in Berkeley is the case that found this: at 192 m all twelve nodes within 75 m were 4–10 m higher while Marin itself kept dropping at 14% for another 120 m to its next shape point, and the 1.2 km wall shipped as two routes with a hole between them. The veto only ever removes false positives — a real valley bottom has every outgoing edge climbing and is untouched. Fixing it changed 109 of 280 collection spots, nearly all by merging fragments (Mount Lemmon went from 12.8 km to 33.4 km). If you widen `peak_search_radius_m`, understand that you are widening this failure mode too.
 
 **Minimum route filter**: discard routes below `min_route_length_m` (profile-dependent: 60m longboard, 150m cyclist). No minimum grade or top speed filter — let ranking surface quality, don't discard results preemptively.
 
@@ -404,7 +463,7 @@ class SearchConfig:
     grade_inflection_threshold: float = 0.04     # 4% grade change triggers an inflection node
 
     # Pathfinding
-    max_paths_per_node: int = 3                  # Allows competing lines without combinatorial blowup
+    max_paths_per_node: int = 4                  # Allows competing lines without combinatorial blowup
     max_routes: int = 25                         # Caps total routes emitted; keeps sidebar manageable
     priority_weight_speed: float = 1.0           # Multiplier on arrival speed in priority tuple
 

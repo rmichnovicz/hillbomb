@@ -16,6 +16,12 @@ from .types import OSMNode, OSMWay
 from .config import SearchConfig, HIGHWAY_RANK
 
 
+# Grade below which an outgoing edge counts as "the road still goes down here",
+# vetoing a valley. 0.5% is under any rideable descent and above the wobble a 10 m
+# DEM puts on a level road, so a flat valley floor still reads as a valley.
+_VALLEY_GRADE_EPS = 0.005
+
+
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6_371_000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -237,6 +243,25 @@ def build_graph(
     )
     elev_by_id = {nid: elev for nid, _x, _y, _lat, _lon, elev in proj}
 
+    # A valley ends a descent in pathfinding, so the flag has to mean "the road
+    # stops going down here" — and the radius test alone cannot say that. It asks
+    # whether a node is the lowest thing within r, which is trivially true of any
+    # node whose next downhill neighbour is further away than r: everything left
+    # inside the circle is the cross-street corners on either side, sitting above
+    # it. Marin Avenue's wall shipped in three pieces for exactly this reason — at
+    # 192 m all twelve nodes within 75 m were 4-10 m higher, while Marin itself
+    # kept dropping at 14% for another 120 m to its next shape point.
+    #
+    # So the geometric test still decides *where* a valley might be, and the graph
+    # vetoes it wherever a rideable edge still leads downhill. This only removes
+    # false positives: a real valley bottom has every outgoing edge climbing, and
+    # is untouched. The epsilon keeps DEM noise on a genuinely flat bottom from
+    # reading as an onward descent.
+    descends_onward = {
+        u for u, _v, d in G.edges(data=True)
+        if d.get("traversable", True) and d.get("grade", 0.0) < -_VALLEY_GRADE_EPS
+    }
+
     # Primary: strict local maxima — node must be at least min_delta above ALL
     # nearby nodes within r.  Works well for isolated hilltops but fails for
     # ridge tops where many nodes share essentially the same elevation.
@@ -247,7 +272,7 @@ def build_graph(
             continue
         if elev - max(nearby) >= min_delta:
             G.nodes[nid]["is_peak"] = True
-        elif min(nearby) - elev >= min_delta:
+        elif min(nearby) - elev >= min_delta and nid not in descends_onward:
             G.nodes[nid]["is_valley"] = True
 
     # Secondary: ridge-top / plateau peaks — catches roads that run along a

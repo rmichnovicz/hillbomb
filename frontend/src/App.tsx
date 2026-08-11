@@ -4,6 +4,7 @@ import { useCollections } from './hooks/useCollections'
 import { usePersistedState } from './hooks/usePersistedState'
 import { usePhysics } from './hooks/usePhysics'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useSheetDrag } from './hooks/useSheetDrag'
 import { useIpLocation } from './hooks/useIpLocation'
 import { nearestCity } from './utils/geo'
 import { HillbombMap } from './components/Map/HillbombMap'
@@ -65,6 +66,70 @@ const DEFAULT_TOGGLES: Toggles = {
 const DEFAULT_ALLOWED_SURFACES: SurfaceCategory[] = ['paved']
 const DEFAULT_MIN_DISTANCE_M = 500
 
+/**
+ * Floor on the mobile sheet's list column, below which the sheet body scrolls instead.
+ *
+ * The sheet is a fixed 65dvh and everything below the tabs except the list is
+ * `flexShrink: 0` — the 190px profile chart, rider settings, the search controls. So the
+ * list column is charged the whole overflow, and on a short window there was nothing
+ * left to charge: at a 480px viewport it collapsed to 23px, clipping the spot header,
+ * the back button and every route card with no way to reach them.
+ *
+ * 260px is what makes the *inside* of the column work, which is the part that bites —
+ * it is not one number but three. The column also carries the spot header (55px) and
+ * the sort row (36px) before a single card is drawn, so a 200px floor left a 73px slit
+ * onto the cards. 260 leaves ~170px, or two full cards, and the sheet scrolls to reach
+ * the chart and the controls below.
+ *
+ * Everything pinned stays pinned, deliberately. Letting it all flow in one scroller
+ * reads better on a spot with three lines and much worse on a search with fourteen: the
+ * chart and the "Search this area" button end up a thousand pixels down the list.
+ */
+const MOBILE_LIST_MIN_PX = 260
+
+/**
+ * The mobile sheet's three resting heights.
+ *
+ * `peek` is the label bar. `half` is the working position — list, chart and controls all
+ * at once, with the map still readable behind it. `full` is for the job this sheet was
+ * worst at: reading down a list of routes. At 65dvh the list column gets ~260px on a
+ * phone, or two cards; at 92dvh it gets ~470px, or five, which is the difference between
+ * paging through results and scanning them.
+ *
+ * Three *discrete* stops rather than free-drag, deliberately. `fitBottomInset` has to
+ * know how much map the sheet is covering, and a snapped detent makes that a lookup;
+ * a continuously-dragged height makes it a recompute on every frame of the gesture.
+ */
+const SHEET_DETENTS = ['peek', 'half', 'full'] as const
+type SheetDetent = (typeof SHEET_DETENTS)[number]
+
+const SHEET_HEIGHT: Record<SheetDetent, string> = {
+  peek: '52px',
+  half: '65dvh',
+  full: '92dvh',
+}
+
+/** Fraction of map height the sheet hides, for route-fitting. See `mobileFitInset`. */
+const SHEET_MAP_COVER: Record<SheetDetent, number> = {
+  // Collapsed it is 52px, which already fits inside the map's 60px base padding.
+  peek: 0,
+  half: 0.65,
+  full: 0.92,
+}
+
+/**
+ * Each label names what a tap does next, since a tap cycles rather than toggles.
+ *
+ * Deliberately not "Expand panel fully" for `half`: Playwright's `getByRole` matches
+ * accessible names by substring, so that would also answer to "Expand panel" and every
+ * test that waits for a collapsed sheet would match an open one.
+ */
+const SHEET_HANDLE_LABEL: Record<SheetDetent, string> = {
+  peek: 'Expand panel',
+  half: 'Maximize panel',
+  full: 'Collapse panel',
+}
+
 export default function App() {
   const { isSearching, routes, statusMessage, error, startSearch, stopSearch } = useSearch()
   const collections = useCollections()
@@ -90,7 +155,14 @@ export default function App() {
   const prevIsSearchingRef = useRef(false)
 
   const isMobile = useIsMobile(640)
-  const [mobilePanelOpen, setMobilePanelOpen] = useState(false)
+  const [mobileDetent, setMobileDetent] = useState<SheetDetent>('peek')
+  // Most of the layout only cares whether there is a panel at all, not how tall it is.
+  const mobilePanelOpen = mobileDetent !== 'peek'
+  /** Open the sheet without overriding a height the reader has already chosen. */
+  const openMobileSheet = useCallback(
+    () => setMobileDetent(d => (d === 'peek' ? 'half' : d)),
+    [],
+  )
 
   const filteredRoutes = useMemo(
     () => minDistanceM > 0 ? routes.filter(r => r.metadata.length_m >= minDistanceM) : routes,
@@ -228,14 +300,26 @@ export default function App() {
     }
   }, [isSearching, hasSearched, routes, lastSuccessMaxLengthM])
 
-  // Auto-expand mobile panel when routes arrive or a group is selected
+  // Auto-expand mobile panel when routes arrive or a group is selected. To `half`, and
+  // only from `peek` — someone who pulled the sheet to `full` to read the list should
+  // not have it yanked back down by the next route that streams in.
   const hasRoutes = routes.length > 0
   useEffect(() => {
-    if (isMobile && hasRoutes) setMobilePanelOpen(true)
-  }, [isMobile, hasRoutes])
+    if (isMobile && hasRoutes) openMobileSheet()
+  }, [isMobile, hasRoutes, openMobileSheet])
   useEffect(() => {
-    if (isMobile && activeGroupId) setMobilePanelOpen(true)
-  }, [isMobile, activeGroupId])
+    if (isMobile && activeGroupId) openMobileSheet()
+  }, [isMobile, activeGroupId, openMobileSheet])
+
+  // The mobile sheet body scrolls when it's too short for its pinned sections (see
+  // MOBILE_LIST_MIN_PX). Switching tabs or opening a spot replaces what's in it, and a
+  // scroll offset left over from the previous view puts the tab bar off the top of the
+  // new one — so send it back to the start.
+  const mobileSheetBodyRef = useRef<HTMLDivElement>(null)
+  const activeSpotSlug = collections.activeSpot?.slug ?? null
+  useEffect(() => {
+    if (mobileSheetBodyRef.current) mobileSheetBodyRef.current.scrollTop = 0
+  }, [tab, activeSpotSlug])
 
   // Destructured because the hook returns a fresh object each render — depending on
   // `collections` itself would re-run these effects/callbacks on every render. These
@@ -310,22 +394,22 @@ export default function App() {
   // `nearestCity` returns null when nothing curated is within ~300 km, in which case
   // the right move is to leave the full list collapsed rather than guess.
   //
-  // Mobile goes further and switches to the Collections tab, because that is what puts
-  // the region's lines on the map behind the collapsed sheet — the whole payoff on a
-  // phone, where the map *is* the app. It costs the floating "Search this area" button
-  // on first load (hidden on this tab), which is the deliberate trade: a first-time
-  // visitor gets real descents on screen instead of a one-tap search of wherever the
-  // map happens to be pointing. The sheet is left collapsed either way; its label
-  // names the region, and one tap opens it.
+  // A hit also switches to the Collections tab, on every viewport. That is what draws
+  // the region's lines on the map — `displayedRoutes` is keyed on the tab — and lines
+  // on the map are the entire point: an empty map plus a button is a worse first screen
+  // than real descents you can see. It is deliberately not conditional on viewport;
+  // an earlier version left desktop on Search until you opened the tab, which meant
+  // desktop paid for the geolocation and showed nothing for it.
+  //
+  // The cost, on mobile: the floating "Search this area" button is hidden on this tab,
+  // so a hit trades one-tap search for one-tap curated content on first load. The sheet
+  // itself stays collapsed — its label names the region, and the map keeps the screen.
+  //
+  // A miss changes nothing anywhere: no region, no tab switch, Search as before.
   const autoExpandedRef = useRef(false)
   useEffect(() => {
     if (autoExpandedRef.current) return
     if (!ipLocation || collections.cities.length === 0) return
-    // Desktop waits until the tab is actually opened. Expanding a region pulls up to
-    // ~100 KB of geometry, and on desktop nothing renders it until then — so there it
-    // would be bytes spent on a tab the visitor may never open. On mobile it is drawn
-    // immediately, so it earns them.
-    if (!isMobile && tab !== 'collections') return
 
     // Every input is in — this is the one chance to act, taken or not.
     autoExpandedRef.current = true
@@ -334,8 +418,8 @@ export default function App() {
     const city = nearestCity(collections.cities, ipLocation.lat, ipLocation.lon)
     if (!city) return
     handleToggleCity(city)
-    if (isMobile) setTab('collections')
-  }, [ipLocation, collections.cities, collections.expandedCity, isMobile, tab, handleToggleCity])
+    setTab('collections')
+  }, [ipLocation, collections.cities, collections.expandedCity, handleToggleCity])
 
   const handleDisciplineFilterChange = useCallback((next: string[]) => {
     setDisciplineFilter(next)
@@ -360,24 +444,65 @@ export default function App() {
     selectCollectionSpot(slug)
   }, [selectCollectionSpot])
 
-  // Toggling the mobile sheet changes how much of the map is covered, and the fit that
-  // framed the open region ran against the old figure — so re-fit, or opening the sheet
-  // slides the region behind it. Only while a region is what's on screen; an open spot
-  // and a search both frame themselves elsewhere.
+  /**
+   * Move the sheet to a detent, re-fitting the map if that changed how much it covers.
+   *
+   * The fit that framed the open region ran against the old figure, so without this,
+   * growing the sheet slides the region behind it. Only while a region is what's on
+   * screen; an open spot and a search both frame themselves elsewhere.
+   */
+  const goToDetent = useCallback((next: SheetDetent) => {
+    setMobileDetent(prev => {
+      if (prev !== next && tab === 'collections' && !collections.activeSpot && collections.expandedCity) {
+        refitRegion()
+      }
+      return next
+    })
+  }, [tab, collections.activeSpot, collections.expandedCity, refitRegion])
+
+  /**
+   * Tapping the handle cycles peek → half → full → peek.
+   *
+   * Cycling rather than toggling because `full` has to be reachable without a drag:
+   * a keyboard user, or anyone whose gesture the browser eats, still needs every height.
+   */
   const handleToggleMobilePanel = useCallback(() => {
-    setMobilePanelOpen(open => !open)
-    if (tab === 'collections' && !collections.activeSpot && collections.expandedCity) {
-      refitRegion()
-    }
+    setMobileDetent(prev => {
+      const next = SHEET_DETENTS[(SHEET_DETENTS.indexOf(prev) + 1) % SHEET_DETENTS.length]
+      if (tab === 'collections' && !collections.activeSpot && collections.expandedCity) {
+        refitRegion()
+      }
+      return next
+    })
   }, [tab, collections.activeSpot, collections.expandedCity, refitRegion])
 
   /**
    * How much of the map the bottom sheet hides, as a fraction of its height.
    *
-   * Only the open sheet counts: collapsed it is 52px, which already fits inside the
-   * fits' own 60px base padding.
+   * Capped below `full`'s real 0.92: at that height the map is a 60px strip, and asking
+   * a fit to frame a route inside it produces a maximum zoom-out that reads as the map
+   * lurching away. Past `half` the reader is looking at the list, not the map, so the
+   * framing it had is the framing worth keeping.
    */
-  const mobileFitInset = isMobile && mobilePanelOpen ? 0.65 : 0
+  const mobileFitInset = isMobile
+    ? Math.min(SHEET_MAP_COVER[mobileDetent], SHEET_MAP_COVER.half)
+    : 0
+
+  // Resolved against the live viewport rather than cached: `dvh` follows rotation and
+  // the mobile URL bar, and a drag that snapped to a stale height would fight both.
+  const sheetHeightPx = useCallback((detent: SheetDetent) => {
+    const spec = SHEET_HEIGHT[detent]
+    return spec.endsWith('dvh')
+      ? (parseFloat(spec) / 100) * window.innerHeight
+      : parseFloat(spec)
+  }, [])
+
+  const { dragHeightPx: sheetDragHeightPx, handleProps: sheetDragHandleProps } = useSheetDrag({
+    detents: SHEET_DETENTS,
+    current: mobileDetent,
+    heightOf: sheetHeightPx,
+    onSettle: goToDetent,
+  })
 
   /**
    * What the collapsed mobile sheet says about Collections.
@@ -391,8 +516,8 @@ export default function App() {
    */
   const collectionsSummary = useMemo(() => {
     const count = visibleCitySpots.length
-    if (!collections.expandedCity || count === 0) return 'Tap to browse collections'
-    return `${count} descent${count === 1 ? '' : 's'} in ${collections.expandedCity} — tap to view`
+    if (!collections.expandedCity || count === 0) return 'Curated descents'
+    return `${count} descent${count === 1 ? '' : 's'} in ${collections.expandedCity}`
   }, [collections.expandedCity, visibleCitySpots.length])
 
   const handleBackToCollections = useCallback(() => {
@@ -525,26 +650,31 @@ export default function App() {
           </div>
         )}
 
-        {/* Bottom sheet panel */}
-        <div style={{
+        {/* Bottom sheet panel. `hb-sheet` hides scrollbar chrome throughout — see index.css. */}
+        <div className="hb-sheet" style={{
           position: 'absolute',
           bottom: 0,
           left: 0,
           right: 0,
-          height: mobilePanelOpen ? '65dvh' : '52px',
+          height: sheetDragHeightPx !== null ? `${sheetDragHeightPx}px` : SHEET_HEIGHT[mobileDetent],
           background: '#f9fafb',
           borderRadius: '16px 16px 0 0',
           boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
           display: 'flex',
           flexDirection: 'column',
-          transition: 'height 0.28s cubic-bezier(0.32, 0.72, 0, 1)',
+          // No transition mid-drag: the pointer is already setting the height every frame,
+          // and easing toward a value that has already moved on just reads as lag.
+          transition: sheetDragHeightPx !== null ? 'none' : 'height 0.28s cubic-bezier(0.32, 0.72, 0, 1)',
           overflow: 'hidden',
           zIndex: 5,
         }}>
-          {/* Drag handle / collapsed summary */}
+          {/* Drag handle / collapsed summary. Draggable *and* clickable: the drag is the
+              affordance the pill has always implied, the click is what keeps every height
+              reachable from a keyboard. */}
           <button
             onClick={handleToggleMobilePanel}
-            aria-label={mobilePanelOpen ? 'Collapse panel' : 'Expand panel'}
+            aria-label={SHEET_HANDLE_LABEL[mobileDetent]}
+            {...sheetDragHandleProps}
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -553,10 +683,11 @@ export default function App() {
               padding: '10px 16px 8px',
               background: 'none',
               border: 'none',
-              cursor: 'pointer',
+              cursor: sheetDragHeightPx !== null ? 'grabbing' : 'grab',
               flexShrink: 0,
               width: '100%',
               boxSizing: 'border-box',
+              ...sheetDragHandleProps.style,
             }}
           >
             <div style={{ width: 40, height: 4, background: '#d1d5db', borderRadius: 2 }} />
@@ -571,27 +702,41 @@ export default function App() {
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}>
+                {/* Names what is in the sheet, and stops there. The "— tap to view"
+                    suffixes these used to carry were teaching an affordance the handle
+                    now has, on the one bar too narrow to spare the characters — long
+                    region names ellipsize here already.
+                    The empty state especially: it read "Tap to open search" while the
+                    floating "Search this area" button sat directly above it, and tapping
+                    the sheet does not search. What is behind it is the rider setup. */}
                 {tab === 'collections'
                   ? (collections.activeSpot?.name ?? collectionsSummary)
                   : routes.length > 0
-                  ? `${routes.length} route${routes.length !== 1 ? 's' : ''} found — tap to view`
+                  ? `${routes.length} route${routes.length !== 1 ? 's' : ''} found`
                   : isSearching
                   ? (statusMessage ?? 'Searching…')
-                  : 'Tap to open search'}
+                  : 'Rider setup & filters'}
               </span>
             )}
           </button>
 
-          {/* Panel content: route list scrolls, controls pinned at bottom */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-            {/* Tabs */}
+          {/* Tabs — outside the scroller. The one thing worth 44 permanent pixels: it is
+              how you get from a spot back to searching without scrolling to find it.
+              Not rendered while collapsed: the whole sheet is 52px then, and 44 of them
+              spent on tabs leaves the summary label with nothing and the body with zero
+              height — which is every child of it unreachable, not merely clipped. */}
+          {mobilePanelOpen && (
             <div style={{ flexShrink: 0, padding: '0 12px 8px' }}>
               <TabBar tab={tab} onChange={handleTabChange} />
             </div>
+          )}
 
-            {/* Route list / collections — grows to fill space, scrolls internally */}
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          {/* Everything else. The chart and the controls below stay pinned, and this
+              scrolls when they don't all fit — see MOBILE_LIST_MIN_PX. */}
+          <div ref={mobileSheetBodyRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+
+            {/* Route list / collections — takes the slack, down to MOBILE_LIST_MIN_PX. */}
+            <div style={{ flex: '1 1 auto', minHeight: `${MOBILE_LIST_MIN_PX}px`, overflow: 'hidden' }}>
               {tab === 'search' ? (
                 <RouteList
                   groups={groups}
@@ -717,7 +862,7 @@ export default function App() {
         {/* Header */}
         <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827' }}>Hillbomb</h1>
-          <p style={{ margin: '2px 0 8px', fontSize: '11px', color: '#9ca3af' }}>Find the best descents near you</p>
+          <p style={{ margin: '2px 0 8px', fontSize: '11px', color: '#9ca3af' }}>Discover diabolical descents</p>
           <TabBar tab={tab} onChange={handleTabChange} />
         </div>
 

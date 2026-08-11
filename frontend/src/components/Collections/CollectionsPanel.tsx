@@ -13,6 +13,7 @@
  * Collection routes are plain `Route`s, so the detail view is just RouteList — the
  * cards, sparklines, hover and selection behavior all come along for free.
  */
+import { useState } from 'react'
 import { RouteList } from '../RouteList/RouteList'
 import type { SortMode } from '../RouteList/RouteList'
 import type { CollectionCity, CollectionSpot, CollectionSpotSummary, StartGroup } from '../../types'
@@ -251,34 +252,77 @@ function CityFolder({ city, isOpen, isLoading, onToggle, onSelectSpot, onHoverSp
   )
 }
 
+/**
+ * The pinned strip of the spot detail view: the way back, and what you're looking at.
+ *
+ * Two lines, and it is worth keeping it to two. This is `flexShrink: 0` at the top of a
+ * panel whose remaining height *is* the scrollable list, so on the mobile sheet every
+ * line here comes straight off the route cards — at 91px it was leaving them 73px to
+ * share. The third line used to repeat the region that the back button already names,
+ * so the state moved up to join it and the line went away.
+ */
 function SpotHeader({ spot, onBack }: { spot: CollectionSpot; onBack: () => void }) {
   return (
-    <div style={{ padding: '8px 12px 10px', borderBottom: '1px solid #e5e7eb', flexShrink: 0, background: '#fff' }}>
+    <div style={{ padding: '8px 12px 9px', borderBottom: '1px solid #e5e7eb', flexShrink: 0, background: '#fff' }}>
       <button
         onClick={onBack}
         style={{
           background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-          fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginBottom: '4px',
+          fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginBottom: '2px',
         }}
       >
-        ← {spot.city}
+        ← {spot.city}, {spot.state}
       </button>
-      <div style={{ fontSize: '14px', fontWeight: 700, color: '#111827' }}>{spot.name}</div>
-      <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '1px' }}>{spot.city}, {spot.state}</div>
-      {/* Both descriptions land here, once you've opened a spot: the blurb for why it's
-          worth riding, the notes for what to watch out for. */}
+      <div style={{ fontSize: '14px', fontWeight: 700, color: '#111827', lineHeight: 1.25 }}>{spot.name}</div>
+    </div>
+  )
+}
+
+/**
+ * Both descriptions, once you've opened a spot: the blurb for why it's worth riding,
+ * the notes for what to watch out for.
+ *
+ * Rendered inside the route list's scroll container rather than in the pinned header,
+ * because together they run to ~140px on a phone — Hawk Hill's pair alone is taller
+ * than the whole list column on a short browser window, which is how the back button
+ * and every route card ended up clipped out of existence.
+ *
+ * The notes are then clamped, because scrolling past them is the same problem in a
+ * politer form: a five-line hazard note at the top of a 165px column means you open a
+ * descent and see no descents. Two lines is enough to tell you there is something to
+ * read, and the lines you came for stay above the fold.
+ */
+function SpotDescription({ spot }: { spot: CollectionSpot }) {
+  const [notesOpen, setNotesOpen] = useState(false)
+  if (!spot.blurb && !spot.notes) return null
+
+  return (
+    <div style={{ margin: '0 0 8px' }}>
       {spot.blurb && (
-        <p style={{ margin: '7px 0 0', fontSize: '11px', color: '#6b7280', lineHeight: 1.45 }}>
+        <p style={{ margin: '0 0 7px', fontSize: '11px', color: '#6b7280', lineHeight: 1.45 }}>
           {spot.blurb}
         </p>
       )}
       {spot.notes && (
-        <p style={{
-          margin: '7px 0 0', fontSize: '11px', color: '#92400e', lineHeight: 1.45,
-          background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '5px', padding: '5px 7px',
-        }}>
-          {spot.notes}
-        </p>
+        <button
+          onClick={() => setNotesOpen(o => !o)}
+          aria-expanded={notesOpen}
+          style={{
+            display: 'block', width: '100%', textAlign: 'left', font: 'inherit', cursor: 'pointer',
+            fontSize: '11px', color: '#92400e', lineHeight: 1.45,
+            background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '5px', padding: '5px 7px',
+          }}
+        >
+          <span style={notesOpen ? undefined : {
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
+            overflow: 'hidden',
+          }}>
+            {spot.notes}
+          </span>
+          <span style={{ display: 'block', marginTop: '3px', fontWeight: 600, opacity: 0.75 }}>
+            {notesOpen ? 'Less' : 'More'}
+          </span>
+        </button>
       )}
     </div>
   )
@@ -364,12 +408,13 @@ export function CollectionsPanel({
     return frame(
       <>
         <SpotHeader spot={activeSpot} onBack={onBack} />
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <div style={fillHeight ? { flex: 1, minHeight: 0, overflow: 'hidden' } : undefined}>
           <RouteList
             // A spot is already one named descent, so its handful of lines go in a flat
             // list — a folder per starting point was a level of nesting with nothing in
             // it, and it hid two of Hawk Hill's three lines behind a collapsed card.
             flat
+            listHeader={<SpotDescription spot={activeSpot} />}
             groups={groups}
             activeGroupId={activeGroupId}
             activeRouteId={activeRouteId}

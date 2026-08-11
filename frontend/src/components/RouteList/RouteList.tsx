@@ -32,6 +32,12 @@ interface RouteListProps {
   flat?: boolean
   /** Required by `flat`: selects a route and its group together, without toggling. */
   onSelectPath?: (routeId: string, startNodeId: string) => void
+  /**
+   * Content rendered above the first card, *inside* the scroll container. For prose that
+   * belongs to the list but must not compete with it for height — a pinned block of it
+   * eats the cards on a short screen, where scrolling costs nothing.
+   */
+  listHeader?: React.ReactNode
 }
 
 export function RouteList({
@@ -51,6 +57,7 @@ export function RouteList({
   fillHeight = true,
   flat = false,
   onSelectPath,
+  listHeader,
 }: RouteListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -72,7 +79,19 @@ export function RouteList({
   useEffect(() => {
     if (!scrollToId) return
     const el = cardRefs.current.get(scrollToId)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    const container = scrollContainerRef.current
+    if (!el || !container) return
+
+    // Deliberately not scrollIntoView: it walks *every* scrollable ancestor, so on the
+    // mobile sheet it scrolls the body as well and pushes the spot header — and the way
+    // back out of the spot — off the top. Move this list and nothing else.
+    const view = container.getBoundingClientRect()
+    const card = el.getBoundingClientRect()
+    if (card.top < view.top) {
+      container.scrollBy({ top: card.top - view.top, behavior: 'smooth' })
+    } else if (card.bottom > view.bottom) {
+      container.scrollBy({ top: card.bottom - view.bottom, behavior: 'smooth' })
+    }
   }, [scrollToId])
 
   return (
@@ -128,6 +147,7 @@ export function RouteList({
 
       {/* Group cards */}
       <div ref={scrollContainerRef} style={{ ...(fillHeight ? { flex: 1, overflowY: 'auto' } : {}), padding: '8px' }}>
+        {listHeader}
         {groups.length === 0 && !isSearching && !error && (
           <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', marginTop: '24px', padding: '0 16px', lineHeight: 1.5 }}>
             {hasSearched

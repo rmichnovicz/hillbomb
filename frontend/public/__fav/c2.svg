@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <!-- F2 — craggy: notched ridge and broken shoulders, so the outline has incident. -->
+  <rect width="64" height="64" rx="14" fill="#16171d"/>
+  <path d="M2 54 C 8 47, 12 39, 16 31 L 20 35 L 26 9 L 32 26 L 36 22 L 43 37 L 48 32 C 53 41, 58 50, 62 54 Z" fill="#e6e9f0"/>
+  <path d="M28 17 C 30 25, 33 30, 32.5 36 C 32 42, 38 45, 41 49 L 42.5 52.5"
+        fill="none" stroke="#f59e0b" stroke-width="5" stroke-linecap="round"/>
+</svg>

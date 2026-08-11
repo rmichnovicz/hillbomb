@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <!-- F1 — twin peak: main summit with a lower sub-peak across a saddle. -->
+  <rect width="64" height="64" rx="14" fill="#16171d"/>
+  <path d="M4 54 C 10 46, 18 28, 24 11 C 29 22, 34 30, 38 34 L 44 27 C 49 36, 55 47, 60 54 Z" fill="#e6e9f0"/>
+  <path d="M26.5 19 C 29 26, 32 31, 32 36 C 32 42, 38 45, 41 49 L 42.5 52.5"
+        fill="none" stroke="#f59e0b" stroke-width="5" stroke-linecap="round"/>
+</svg>

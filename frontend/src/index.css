@@ -71,3 +71,22 @@ p {
   from { background-position: 200% 0; }
   to { background-position: -200% 0; }
 }
+
+/* The mobile bottom sheet scrolls in two nested places — the sheet body, and the route
+   list inside it — so on any platform that paints scrollbars rather than overlaying
+   them, two tracks stack up against the same right edge and read as a rendering fault.
+   Phones show neither, and the layout already signals both: cards are cut off mid-card
+   at the fold, and the sheet has its drag handle. So hide the chrome, not the scrolling.
+
+   Deliberately scoped to `.hb-sheet` and its descendants. The desktop sidebar keeps its
+   scrollbar, where a 25-route list has no other cue for how far down it runs. */
+.hb-sheet,
+.hb-sheet * {
+  scrollbar-width: none; /* Firefox */
+}
+
+.hb-sheet::-webkit-scrollbar,
+.hb-sheet *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

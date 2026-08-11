@@ -68,7 +68,17 @@ class SearchConfig:
     max_bridge_span_m: float = 500.0
 
     # Pathfinding
-    max_paths_per_node: int = 3
+    # How many path lineages may pass through one node; the 4th is finalized where
+    # it stands. Note this is cumulative over the whole search, not a count of
+    # paths alive right now — node_path_count is incremented per fork and only
+    # ever released for a seed that gets skipped. That is what makes it an
+    # effective brake on branching, and also what makes it truncate a descent
+    # mid-road once a few earlier lineages have used up a node.
+    # At 3 it did: Harris Creek Road came out as 15.5 km + two fragments, split on
+    # a 0.4% straight, and Pacheco Canyon lost nearly half its length. 4 restores
+    # both to one continuous route for about 5% more search time; past 4 nothing
+    # further is recovered on any spot in the collection.
+    max_paths_per_node: int = 4
     max_routes: int = 9999
     # Initial speed for a freshly seeded path (m/s).  Seeds start wherever the
     # road first tips downhill (see find_routes), not only at detected peaks, and

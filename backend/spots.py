@@ -553,6 +553,186 @@ SPOTS: list[Spot] = [
         confidence="high",
     ),
 
+    # The dirt half of the Bay Area, mined from recorded GPX tracks and then snapped
+    # to OSM way names. `avoid_bigger_roads` is off on every trail spot below: a
+    # singletrack crossing a fire road (`unclassified`, rank 4) reads as meeting a
+    # bigger road and ends the descent. Same reason as the Downieville spot.
+    Spot(
+        slug="limekiln-priest-rock",
+        name="Limekiln and Priest Rock (Sierra Azul)",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.19024, -121.97454, 37.2052, -121.9454),
+        osm_way_names=("Limekiln Trail", "Priest Rock Trail"),
+        blurb=(
+            "Fire road above Los Gatos that runs Limekiln straight into Priest Rock "
+            "for 500 m of loose, exposed descent to Lexington Reservoir."
+        ),
+        disciplines=("gravel", "mtb"),
+        rider_profile="gravel",
+        notes=(
+            "Midpen land: a posted 15 mph limit, 5 mph passing or at blind turns, "
+            "helmets required, e-bikes prohibited on most trails. Limekiln has had "
+            "weekday maintenance closures — check before riding. Loose decomposed "
+            "granite over hardpack, and no shade on the upper half."
+        ),
+        toggles=Toggles(
+            avoid_stoplights=False, avoid_stop_signs=False,
+            avoid_bigger_roads=False, avoid_equal_roads=False,
+            stay_on_initial_road=False,
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="meridian-ridge-diablo",
+        name="Meridian Ridge Road (Mount Diablo)",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.89407, -121.92915, 37.90852, -121.91726),
+        osm_way_names=("Meridian Ridge Road", "Donner Canyon Road"),
+        blurb=(
+            "Diablo's dirt side, dropping off the Mitchell Canyon approach in steep "
+            "fire-road pitches well past 20%."
+        ),
+        disciplines=("mtb", "gravel"),
+        rider_profile="mtb",
+        notes=(
+            "Mount Diablo State Park. Fire road, open to bikes and Class 1 e-bikes; "
+            "Class 2 and 3 are prohibited on all trails. Rutted and loose after rain."
+        ),
+        toggles=Toggles(
+            avoid_stoplights=False, avoid_stop_signs=False,
+            avoid_bigger_roads=False, avoid_equal_roads=False,
+            stay_on_initial_road=False,
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="grizzly-gulch-coe",
+        name="Grizzly Gulch (Henry Coe)",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.10172, -121.46698, 37.1144, -121.44326),
+        osm_way_names=("Grizzly Gulch Trail",),
+        blurb=(
+            "Rustic Coe singletrack ridden east to west, giving up 235 m on the way "
+            "back down to the Coyote Creek gate."
+        ),
+        disciplines=("mtb",),
+        rider_profile="mtb",
+        notes=(
+            "Henry W. Coe State Park: singletrack closes to bikes for 48 hours after "
+            "a half inch or more of rain in 24 hours; roads stay open. No "
+            "cross-country riding. Remote — carry water and expect no phone signal."
+        ),
+        toggles=Toggles(
+            avoid_stoplights=False, avoid_stop_signs=False,
+            avoid_bigger_roads=False, avoid_equal_roads=False,
+            stay_on_initial_road=False,
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="middle-ridge-coe",
+        name="Middle Ridge (Henry Coe)",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.18735, -121.52515, 37.1943, -121.51109),
+        osm_way_names=("Middle Ridge Trail",),
+        blurb=(
+            "The descent off Coe's most-ridden loop — narrow, rooty singletrack "
+            "falling toward China Hole at better than 12%."
+        ),
+        disciplines=("mtb",),
+        rider_profile="mtb",
+        notes=(
+            "Henry W. Coe State Park: singletrack closes to bikes for 48 hours after "
+            "a half inch or more of rain in 24 hours; roads stay open. No "
+            "cross-country riding."
+        ),
+        toggles=Toggles(
+            avoid_stoplights=False, avoid_stop_signs=False,
+            avoid_bigger_roads=False, avoid_equal_roads=False,
+            stay_on_initial_road=False,
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="south-park-drive-tilden",
+        name="South Park Drive (Tilden)",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.8779, -122.24462, 37.8946, -122.22081),
+        osm_way_names=("South Park Drive",),
+        blurb=(
+            "Tilden's drop toward Wildcat Canyon, closed to cars five months a year "
+            "so the whole descent runs traffic-free."
+        ),
+        disciplines=("road",),
+        rider_profile="cyclist_upright",
+        notes=(
+            "East Bay Regional Park District closes it to motor vehicles from "
+            "November 1 to March 31 for newt migration, and cycling is explicitly "
+            "allowed during the closure. Watch for newts on the pavement — they are "
+            "slow, hard to see, and the reason the road closes."
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="morgan-territory-road",
+        name="Morgan Territory Road",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.77637, -121.78032, 37.79585, -121.76763),
+        osm_way_names=("Morgan Territory Road",),
+        blurb=(
+            "A one-lane ribbon off the back of Diablo, dropping through oak shade "
+            "toward the Livermore side."
+        ),
+        disciplines=("road",),
+        rider_profile="cyclist_upright",
+        notes=(
+            "Effectively single-lane in places with blind turns and no shoulder. "
+            "Expect oncoming cars mid-lane and gravel washed into the corners."
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="jamison-creek-road",
+        name="Jamison Creek Road",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(37.14499, -122.18039, 37.1528, -122.17198),
+        osm_way_names=("Jamison Creek Road",),
+        blurb=(
+            "The steepest paved descent in the Santa Cruz Mountains set, falling off "
+            "Empire Grade into Boulder Creek at nearly 13%."
+        ),
+        disciplines=("road",),
+        rider_profile="cyclist_upright",
+        notes=(
+            "Steep, narrow and rough in patches — braking-intensive the whole way "
+            "down, with driveways hidden in the trees."
+        ),
+        confidence="medium",
+    ),
+    Spot(
+        slug="crane-canyon-road",
+        name="Crane Canyon Road",
+        city="San Francisco Bay Area",
+        state="CA",
+        bbox=(38.36344, -122.65958, 38.37506, -122.63632),
+        osm_way_names=("Crane Canyon Road",),
+        blurb=(
+            "Sonoma Mountain's west side unwinding toward Rohnert Park — open, fast "
+            "and steady rather than steep."
+        ),
+        disciplines=("road",),
+        rider_profile="cyclist_upright",
+        notes="No shoulder, and moderate local traffic on weekends.",
+        confidence="medium",
+    ),
+
     # ── Los Angeles ───────────────────────────────────────────────────────────
     Spot(
         slug="baxter-street",

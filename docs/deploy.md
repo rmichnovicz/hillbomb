@@ -1,11 +1,17 @@
 # Deploying Hillbomb
 
-**Status: live, both halves**, as of 2026-08-07.
+**Status: live, both halves**, as of 2026-08-09.
 
 | | |
 |---|---|
 | Static | Cloudflare Pages project `hillbomb` → `https://hillbomb.pages.dev`, custom domain `hillbomb.app` |
 | API | Cloud Run service `hillbomb`, project `hillbomb`, region `us-west1` |
+
+**The custom domain is a separate step from the deploy, and it is easy to believe it
+happened when it did not.** For two days this doc said `hillbomb.app` was attached while
+the Pages project had no custom domain at all and the zone apex had no record — the site
+was live on `hillbomb.pages.dev` and nothing about a Pages deploy complains. `dig +short
+hillbomb.app` is the check that would have caught it; see step 8.
 
 **Cloud Run hands out two URLs for one service.** `gcloud run services describe` reports
 `https://hillbomb-auxunbjxna-uw.a.run.app`, while the console also shows
@@ -84,8 +90,8 @@ exists only in production.
 
 The domain, and nothing else. Cloudflare Pages' free tier covers this comfortably —
 unlimited bandwidth on static assets, against limits of 20,000 files and 25 MiB per
-file. Hillbomb ships **95 files totalling 2.3 MB**, the largest being the 136 KB
-Vesuvius spot.
+file. Hillbomb ships **287 files totalling 7.5 MB**, the largest single file being the
+1.0 MB MapLibre chunk and the largest spot the 134 KB Deer Creek Canyon.
 
 R2 is the wrong tool here despite being the obvious-sounding one: it would mean a
 Worker in front of a bucket to serve objects Pages already serves for free. It becomes
@@ -141,7 +147,7 @@ account as Pages, so attaching the domain in step 8 creates its own record and i
 its own certificate with nothing to delegate.
 
 It is the domain and nothing else that costs money here. Pages is free at Hillbomb's
-size — 95 files, 2.3 MB, against limits of 20,000 files and 25 MiB per file — and Cloud
+size — 287 files, 7.5 MB, against limits of 20,000 files and 25 MiB per file — and Cloud
 Run's free tier covers the search traffic for a long while.
 
 (If you ever move to a domain bought elsewhere, you point that registrar's nameservers
@@ -276,8 +282,8 @@ it is exported from `backend/data/collections.json` afterwards by
 `backend/scripts/export_static_collections.py`, which writes:
 
 ```
-frontend/dist/collections/index.json      every city, every spot, no geometry (60 KB)
-frontend/dist/collections/<slug>.json     one spot with its full routes (94 files)
+frontend/dist/collections/index.json      every city, every spot, no geometry (175 KB)
+frontend/dist/collections/<slug>.json     one spot with its full routes (280 files)
 ```
 
 Skip that step and you deploy a site that looks perfect and whose every Collections
@@ -340,10 +346,38 @@ is live immediately; the **branch alias** (`https://ip-geo.hillbomb.pages.dev`) 
 flapping below. Test against the hash URL and don't diagnose anything from the alias
 until it settles.
 
-Attach the domain in the Cloudflare dashboard under **Workers & Pages → hillbomb →
-Custom domains**. Certificates are issued automatically and free. There is no wrangler
-command for this as of 4.120 — `wrangler pages` has no `domain` subcommand, so the
-dashboard (or the REST API) is the only route.
+### Attaching hillbomb.app
+
+Do this in the Cloudflare dashboard under **Workers & Pages → hillbomb → Custom
+domains**. Certificates are issued automatically and free. There is no wrangler command
+as of 4.120 — `wrangler pages` has no `domain` subcommand.
+
+**The REST API is not an equivalent route, and failing halfway looks like success.**
+`POST /accounts/{acc}/pages/projects/hillbomb/domains` with `{"name":"hillbomb.app"}`
+returns `success: true` and registers the domain against the project — but it does
+**not** create the DNS record, even with the zone in the same Cloudflare account. The
+dashboard wizard creates the record as a second, separate action. Via the API alone the
+domain sits at `status: "pending"` forever, waiting on HTTP validation against a
+hostname that does not resolve. Nothing errors; you just have a custom domain that isn't
+one.
+
+Worse, you may not be able to finish it from the CLI at all: `wrangler login`'s OAuth
+token carries `zone:read` and **no DNS write scope**, so creating the record over the
+API needs a separately-minted token with `Zone:DNS:Edit`. Getting a `pages:write` call
+to succeed says nothing about whether you can write the record it depends on.
+
+The record itself is a proxied `CNAME hillbomb.app → hillbomb.pages.dev` (Cloudflare
+flattens it at the apex, so it answers as `A`).
+
+Verify from outside Cloudflare, not from the dashboard's own status column:
+
+```bash
+dig +short hillbomb.app A && curl -fsS -o /dev/null -w '%{http_code}\n' https://hillbomb.app/
+```
+
+Empty `dig` output is the whole failure mode. `.app` is HSTS-preloaded, so a browser
+hitting an unresolvable `hillbomb.app` shows a DNS error rather than anything that
+points at Pages.
 
 ### Expect 522s for the first few minutes after a first deployment
 

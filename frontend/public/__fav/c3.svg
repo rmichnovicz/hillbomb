@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <!-- F3 — alpine: sharp apex, concave flanks flaring at the base, one left shoulder. -->
+  <rect width="64" height="64" rx="14" fill="#16171d"/>
+  <path d="M6 54 C 11 48, 15 40, 18 33 L 21 36 C 22 28, 24 18, 25 10 C 31 27, 39 44, 52 54 Z" fill="#e6e9f0"/>
+  <path d="M27 17 C 30 25, 33 30, 33 36 C 33 42, 38 45, 41 49 L 42.5 52.5"
+        fill="none" stroke="#f59e0b" stroke-width="5" stroke-linecap="round"/>
+</svg>
